@@ -30,4 +30,9 @@ export class RoutersController {
   health(@Param('id') id: string) {
     return this.routers.getHealth(id);
   }
+
+  @Get(':id/provision.rsc')
+  getProvisionScript(@Param('id') id: string) {
+    return this.routers.generateProvisionScript(id);
+  }
 }

@@ -79,4 +79,26 @@ export class RoutersService {
       timestamp: new Date(),
     };
   }
+
+  generateProvisionScript(routerId: string) {
+    const frontendUrl = process.env.FRONTEND_URL || 'https://wavepass-web.vercel.app';
+    return `# WavePass Cloud Provisioning Script (RouterOS v7)
+# Generated dynamically for Gateway ID: ${routerId}
+
+/ip hotspot profile add name="wavepass-profile" \\
+  hotspot-address=10.5.50.1 \\
+  login-by=http-chap,http-pap,mac \\
+  login-page="${frontendUrl}/portal"
+
+/ip hotspot add name="wavepass-hotspot" \\
+  interface=bridge1 \\
+  profile=wavepass-profile \\
+  disabled=no
+
+/ip hotspot walled-garden add dst-host="*.paystack.co" action=allow
+/ip hotspot walled-garden add dst-host="*.paystack.com" action=allow
+/ip hotspot walled-garden add dst-host="*.supabase.co" action=allow
+/ip hotspot walled-garden add dst-host="wavepass-web.vercel.app" action=allow
+`;
+  }
 }
