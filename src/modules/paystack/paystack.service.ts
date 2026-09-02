@@ -58,7 +58,7 @@ export class PaystackService {
     if (!res.ok) {
       throw new InternalServerErrorException('Paystack verify failed');
     }
-    return res.json();
+    return (await res.json()) as PaystackVerifyResponse;
   }
 
   /** HMAC SHA512 of the *raw* request body, compared with x-paystack-signature. */
