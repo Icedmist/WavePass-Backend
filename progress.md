@@ -46,3 +46,11 @@
 - [x] Created `PortalService` and `PortalController` (`GET /api/v1/portal/plans`, `POST /api/v1/portal/init-payment`, `POST /api/v1/portal/simulate-payment`, `GET /api/v1/portal/sessions/:mac`).
 - [x] Provided mock payment checkout fallback for local offline testing.
 - [x] Integrated into `AppModule` and verified build.
+
+### 7. Admin Metrics, Self-Healing Reconciliation & Cleanup Engine (PRD §14, §15, §16)
+- [x] Implemented `AdminService.getStats` exposing revenue in NGN/kobo, payment counts, ARPU, by-plan sales distribution, and active/expired router counters.
+- [x] Built automated reconciliation routine (`POST /api/v1/admin/reconcile`) that compares fulfilled payments with router state, detects dropped sessions, self-heals by re-enqueuing provisioning, and flags orphaned router users.
+- [x] Implemented router session garbage collection (`POST /api/v1/admin/cleanup`) to prune expired users from hardware and synchronize database state.
+- [x] Built server-side transaction double-verification endpoint (`GET /api/v1/admin/verify/:reference`).
+- [x] Exposed `AdminController` with full compatibility matching the Next.js admin dashboard expectations.
+- [x] Integrated into `AppModule` and verified build.

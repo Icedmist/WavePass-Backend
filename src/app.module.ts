@@ -34,6 +34,9 @@ import { SessionsService } from './modules/sessions/sessions.service';
 import { PortalController } from './modules/portal/portal.controller';
 import { PortalService } from './modules/portal/portal.service';
 
+import { AdminController } from './modules/admin/admin.controller';
+import { AdminService } from './modules/admin/admin.service';
+
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -54,6 +57,7 @@ import { PortalService } from './modules/portal/portal.service';
     RoutersController,
     SessionsController,
     PortalController,
+    AdminController,
   ],
   providers: [
     PrismaService,
@@ -65,6 +69,7 @@ import { PortalService } from './modules/portal/portal.service';
     RoutersService,
     SessionsService,
     PortalService,
+    AdminService,
     PaymentFulfilmentQueue,
     PaymentFulfilmentProcessor,
     MikrotikProvisioningQueue,
