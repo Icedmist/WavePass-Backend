@@ -27,6 +27,7 @@ async function bootstrap() {
   );
 
   app.setGlobalPrefix('api/v1');
+  app.enableCors({ origin: true, credentials: true });
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
 
   const port = process.env.PORT ? Number(process.env.PORT) : 3000;
