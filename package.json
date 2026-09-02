@@ -8,7 +8,11 @@
     "start:dev": "nest start --watch",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "test": "jest"
+    "db:seed": "tsx prisma/seed.ts",
+    "test": "vitest run"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
     "@nestjs/bullmq": "^10.2.0",
@@ -32,6 +36,8 @@
   "devDependencies": {
     "@nestjs/cli": "^10.4.5",
     "@types/node": "^22.5.0",
-    "typescript": "^5.5.4"
+    "tsx": "^4.23.13",
+    "typescript": "^5.5.4",
+    "vitest": "^4.1.11"
   }
 }

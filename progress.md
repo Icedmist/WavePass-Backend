@@ -54,3 +54,10 @@
 - [x] Built server-side transaction double-verification endpoint (`GET /api/v1/admin/verify/:reference`).
 - [x] Exposed `AdminController` with full compatibility matching the Next.js admin dashboard expectations.
 - [x] Integrated into `AppModule` and verified build.
+
+### 8. Seeding, Containerization & Automated Unit Testing (PRD §20, §23, §28.8)
+- [x] Created database seed script (`prisma/seed.ts`) that bootstraps the flagship venue, primary router, and standard 3 plans (1h ₦200, 12h ₦800, 24h ₦1500).
+- [x] Configured multi-stage production `Dockerfile` with Alpine Node.js runtime.
+- [x] Created `docker-compose.yml` defining orchestrated PostgreSQL, Redis (BullMQ), and API services with healthchecks.
+- [x] Installed `vitest` and created test suite (`test/plans.spec.ts`) validating plan calculations, duration conversions, and profile mappings.
+- [x] Verified 100% test passing and clean `nest build` production output.
