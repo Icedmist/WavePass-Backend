@@ -19,6 +19,9 @@ import { MikrotikProvisioningQueue } from './modules/mikrotik/mikrotik-provision
 import { MikrotikProvisioningProcessor } from './modules/mikrotik/mikrotik-provisioning.processor';
 import { MikrotikAdapter } from './modules/mikrotik/mikrotik.adapter';
 
+import { PlansController } from './modules/plans/plans.controller';
+import { PlansService } from './modules/plans/plans.service';
+
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -30,12 +33,18 @@ import { MikrotikAdapter } from './modules/mikrotik/mikrotik.adapter';
       { name: 'mikrotik-provisioning' },
     ),
   ],
-  controllers: [PaystackController, OrdersController, VouchersController],
+  controllers: [
+    PaystackController,
+    OrdersController,
+    VouchersController,
+    PlansController,
+  ],
   providers: [
     PrismaService,
     PaystackService,
     OrdersService,
     VouchersService,
+    PlansService,
     PaymentFulfilmentQueue,
     PaymentFulfilmentProcessor,
     MikrotikProvisioningQueue,
