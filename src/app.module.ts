@@ -22,6 +22,12 @@ import { MikrotikAdapter } from './modules/mikrotik/mikrotik.adapter';
 import { PlansController } from './modules/plans/plans.controller';
 import { PlansService } from './modules/plans/plans.service';
 
+import { VenuesController } from './modules/venues/venues.controller';
+import { VenuesService } from './modules/venues/venues.service';
+
+import { RoutersController } from './modules/routers/routers.controller';
+import { RoutersService } from './modules/routers/routers.service';
+
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -38,6 +44,8 @@ import { PlansService } from './modules/plans/plans.service';
     OrdersController,
     VouchersController,
     PlansController,
+    VenuesController,
+    RoutersController,
   ],
   providers: [
     PrismaService,
@@ -45,6 +53,8 @@ import { PlansService } from './modules/plans/plans.service';
     OrdersService,
     VouchersService,
     PlansService,
+    VenuesService,
+    RoutersService,
     PaymentFulfilmentQueue,
     PaymentFulfilmentProcessor,
     MikrotikProvisioningQueue,

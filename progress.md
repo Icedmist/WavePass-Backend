@@ -27,3 +27,9 @@
 - [x] Built `PlansService` with duration formatting, profile generation (`profile_1h`, `profile_12h`, `profile_24h`), plan versioning, and frontend backward compatibility (`priceNGN`, `amountKobo`, `limitUptime`).
 - [x] Exposed `PlansController` (`GET /api/v1/plans`, `GET /api/v1/plans/:id`, `POST /api/v1/plans`, `PATCH /api/v1/plans/:id`, `DELETE /api/v1/plans/:id`).
 - [x] Integrated into `AppModule` and verified build.
+
+### 4. Venues & Routers Infrastructure Modules (PRD §4.1, §8, §10)
+- [x] Created `VenuesService` and `VenuesController` (`GET /api/v1/venues`, `GET /api/v1/venues/:id`, `POST /api/v1/venues`, `GET /api/v1/venues/default` auto-bootstrap).
+- [x] Created `RoutersService` and `RoutersController` (`GET /api/v1/routers`, `GET /api/v1/routers/:id`, `POST /api/v1/routers`).
+- [x] Implemented real-time router connectivity testing (`POST /api/v1/routers/:id/test`) and health diagnostics (`GET /api/v1/routers/:id/health`).
+- [x] Verified build integrity across all modules.
