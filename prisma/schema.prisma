@@ -1,0 +1,285 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RouterStatus {
+  ONLINE
+  DEGRADED
+  OFFLINE
+  AUTH_FAILED
+  CONFIG_ERROR
+}
+
+enum PlanMode {
+  ELAPSED
+  PAUSED
+}
+
+enum OrderStatus {
+  CREATED
+  AWAITING_PAYMENT
+  PAID
+  PROVISIONING
+  ACTIVE
+  COMPLETED
+  PAYMENT_FAILED
+  PROVISIONING_FAILED
+  REFUND_REQUIRED
+}
+
+enum PaymentStatus {
+  CREATED
+  PENDING
+  SUCCESS
+  FULFILLED
+  FAILED
+  ABANDONED
+  REVERSED
+  REFUNDED
+}
+
+enum VoucherStatus {
+  GENERATED
+  ISSUED
+  REDEEMED
+  ACTIVE
+  CONSUMED
+  EXPIRED
+  REVOKED
+}
+
+enum SessionStatus {
+  ACTIVE
+  ENDED
+  EXPIRED
+}
+
+enum RouterJobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  RETRY_WAIT
+  FAILED
+}
+
+model Venue {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  timezone  String   @default("Africa/Lagos")
+  currency  String   @default("NGN")
+  logoUrl   String?
+  status    String   @default("active")
+  createdAt DateTime @default(now())
+
+  members  VenueMember[]
+  routers  Router[]
+  plans    Plan[]
+  orders   Order[]
+  vouchers Voucher[]
+  sessions Session[]
+  auditLogs AuditLog[]
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  name         String?
+  phone        String?
+  authProvider String   @default("supabase")
+  status       String   @default("active")
+  createdAt    DateTime @default(now())
+
+  memberships VenueMember[]
+  auditLogs   AuditLog[]
+}
+
+model VenueMember {
+  venueId     String
+  userId      String
+  role        String // Owner | Admin | Operator | Viewer | Technician
+  permissions Json?
+
+  venue Venue @relation(fields: [venueId], references: [id])
+  user  User  @relation(fields: [userId], references: [id])
+
+  @@id([venueId, userId])
+}
+
+model Router {
+  id             String       @id @default(uuid())
+  venueId        String
+  name           String
+  endpoint       String
+  connectionMode String // local | tunnel
+  rosVersion     String?
+  status         RouterStatus @default(OFFLINE)
+  lastSeen       DateTime?
+  createdAt      DateTime     @default(now())
+
+  venue Venue @relation(fields: [venueId], references: [id])
+  jobs  RouterJob[]
+  sessions Session[]
+
+  @@index([venueId])
+}
+
+model Plan {
+  id              String   @id @default(uuid())
+  venueId         String
+  name            String
+  description     String?
+  priceMinor      Int
+  durationSeconds Int
+  dataLimitBytes  BigInt?
+  rateLimit       String?
+  simultaneousDevices Int  @default(1)
+  mode            PlanMode @default(ELAPSED)
+  version         Int      @default(1)
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  venue    Venue     @relation(fields: [venueId], references: [id])
+  orders   Order[]
+  vouchers Voucher[]
+
+  @@index([venueId])
+}
+
+model Order {
+  id           String      @id @default(uuid())
+  venueId      String
+  planId       String
+  customerRef  String?
+  amountMinor  Int
+  currency     String      @default("NGN")
+  status       OrderStatus @default(CREATED)
+  paymentProvider String   @default("paystack")
+  createdAt    DateTime    @default(now())
+
+  venue   Venue    @relation(fields: [venueId], references: [id])
+  plan    Plan     @relation(fields: [planId], references: [id])
+  payment Payment?
+
+  @@index([venueId])
+  @@index([status])
+}
+
+model Payment {
+  id                    String        @id @default(uuid())
+  orderId               String        @unique
+  provider              String        @default("paystack")
+  providerReference      String        @unique
+  providerTransactionId String?
+  amountMinor           Int
+  status                PaymentStatus @default(CREATED)
+  channel               String?
+  paidAt                DateTime?
+  createdAt             DateTime      @default(now())
+
+  order    Order     @relation(fields: [orderId], references: [id])
+  vouchers Voucher[]
+
+  @@index([status])
+}
+
+model Voucher {
+  id              String        @id @default(uuid())
+  venueId         String
+  planId          String
+  paymentId       String?
+  codeHash        String        @unique
+  displayCodeEnc  String? // encrypted, retrievable for printing
+  status          VoucherStatus @default(GENERATED)
+  issuedAt        DateTime      @default(now())
+  expiresAt       DateTime?
+  redeemedAt      DateTime?
+  firstLoginAt    DateTime?
+  consumedAt      DateTime?
+  revokedAt       DateTime?
+  redeemedDeviceId String?
+  redeemedIp      String?
+  redeemedMac     String?
+  createdBy       String?
+
+  venue   Venue    @relation(fields: [venueId], references: [id])
+  plan    Plan     @relation(fields: [planId], references: [id])
+  payment Payment? @relation(fields: [paymentId], references: [id])
+  sessions Session[]
+
+  @@index([venueId])
+  @@index([status])
+}
+
+model Session {
+  id        String        @id @default(uuid())
+  venueId   String
+  routerId  String
+  voucherId String?
+  orderId   String?
+  deviceId  String?
+  mac       String?
+  ip        String?
+  startedAt DateTime      @default(now())
+  expiresAt DateTime?
+  endedAt   DateTime?
+  status    SessionStatus @default(ACTIVE)
+
+  venue   Venue    @relation(fields: [venueId], references: [id])
+  router  Router   @relation(fields: [routerId], references: [id])
+  voucher Voucher? @relation(fields: [voucherId], references: [id])
+
+  @@index([venueId])
+  @@index([routerId])
+}
+
+model RouterJob {
+  id            String          @id @default(uuid())
+  routerId      String
+  type          String
+  payload       Json
+  status        RouterJobStatus @default(QUEUED)
+  attempts      Int             @default(0)
+  nextAttemptAt DateTime?
+  lastError     String?
+  createdAt     DateTime        @default(now())
+
+  router Router @relation(fields: [routerId], references: [id])
+
+  @@index([routerId])
+  @@index([status])
+}
+
+model WebhookEvent {
+  id             String   @id @default(uuid())
+  provider       String   @default("paystack")
+  eventKey       String   @unique
+  signatureValid Boolean
+  payloadJson    Json
+  processedAt    DateTime?
+  status         String   @default("received")
+  createdAt      DateTime @default(now())
+
+  @@index([provider])
+}
+
+model AuditLog {
+  id           String   @id @default(uuid())
+  venueId      String?
+  actorId      String?
+  action       String
+  resourceType String
+  resourceId   String?
+  metadata     Json?
+  createdAt    DateTime @default(now())
+
+  venue Venue? @relation(fields: [venueId], references: [id])
+  actor User?  @relation(fields: [actorId], references: [id])
+
+  @@index([venueId])
+}
