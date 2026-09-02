@@ -39,3 +39,10 @@
 - [x] Implemented router-level session termination via `MikrotikAdapter.removeHotspotUser` on disconnect (`POST /api/v1/sessions/:id/disconnect`).
 - [x] Exposed `SessionsController` (`GET /api/v1/sessions`, `GET /api/v1/sessions/active`, `GET /api/v1/sessions/:id`, `POST /api/v1/sessions/:id/disconnect`).
 - [x] Integrated into `AppModule` and verified build.
+
+### 6. Captive Portal Bridge & Hardware Provisioning Compatibility (PRD §4.5, §7)
+- [x] Enhanced `MikrotikAdapter.createHotspotUser` with dual-protocol fallback (RouterOS v7 `PUT /rest/ip/hotspot/user` and legacy/mock `POST /rest/ip/hotspot/user/add`).
+- [x] Upgraded `MikrotikProvisioningProcessor` to detect captive portal MAC addresses, automatically bind the client MAC address as the hotspot user, and attach the exact plan profile.
+- [x] Created `PortalService` and `PortalController` (`GET /api/v1/portal/plans`, `POST /api/v1/portal/init-payment`, `POST /api/v1/portal/simulate-payment`, `GET /api/v1/portal/sessions/:mac`).
+- [x] Provided mock payment checkout fallback for local offline testing.
+- [x] Integrated into `AppModule` and verified build.

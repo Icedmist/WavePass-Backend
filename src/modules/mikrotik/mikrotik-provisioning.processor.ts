@@ -36,8 +36,10 @@ export class MikrotikProvisioningProcessor extends WorkerHost {
       throw new Error('No router available'); // triggers BullMQ retry/backoff
     }
 
-    const username = `wp_${randomBytes(4).toString('hex')}`;
-    const password = randomBytes(6).toString('hex');
+    const isMac = order.customerRef && /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/.test(order.customerRef);
+    const username = isMac ? order.customerRef!.toUpperCase() : `wp_${randomBytes(4).toString('hex')}`;
+    const password = isMac ? username : randomBytes(6).toString('hex');
+    const profile = order.plan.rateLimit || `profile_${this.formatDuration(order.plan.durationSeconds)}`;
 
     await this.mikrotik.createHotspotUser(
       router.endpoint,
@@ -45,6 +47,7 @@ export class MikrotikProvisioningProcessor extends WorkerHost {
       {
         username,
         password,
+        profile,
         sessionTimeoutSeconds: order.plan.durationSeconds,
         limitBytesTotal: order.plan.dataLimitBytes ? Number(order.plan.dataLimitBytes) : undefined,
         sharedUsers: order.plan.simultaneousDevices,
@@ -57,11 +60,20 @@ export class MikrotikProvisioningProcessor extends WorkerHost {
           venueId: order.venueId,
           routerId: router.id,
           orderId: order.id,
+          mac: isMac ? username : null,
+          deviceId: isMac ? username : null,
           expiresAt: new Date(Date.now() + order.plan.durationSeconds * 1000),
         },
       }),
       this.prisma.order.update({ where: { id: order.id }, data: { status: 'ACTIVE' } }),
     ]);
+  }
+
+  private formatDuration(seconds: number): string {
+    if (seconds >= 86400) return `${Math.floor(seconds / 86400)}d`;
+    if (seconds >= 3600) return `${Math.floor(seconds / 3600)}h`;
+    if (seconds >= 60) return `${Math.floor(seconds / 60)}m`;
+    return `${seconds}s`;
   }
 
   private async provisionForVoucher(voucherId: string) {

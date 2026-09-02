@@ -38,22 +38,40 @@ export class MikrotikAdapter {
     credentials: { username: string; password: string },
     spec: HotspotUserSpec,
   ): Promise<void> {
-    const res = await fetch(`${endpoint}/rest/ip/hotspot/user`, {
+    const payload = {
+      name: spec.username,
+      password: spec.password || spec.username,
+      profile: spec.profile,
+      'limit-uptime': spec.sessionTimeoutSeconds ? `${spec.sessionTimeoutSeconds}s` : undefined,
+      'limit-bytes-total': spec.limitBytesTotal,
+      'shared-users': spec.sharedUsers?.toString(),
+      comment: `wavepass-provisioned`,
+    };
+
+    // First attempt RouterOS v7 standard PUT /rest/ip/hotspot/user
+    let res = await fetch(`${endpoint}/rest/ip/hotspot/user`, {
       method: 'PUT',
       headers: {
         Authorization: this.basicAuth(credentials.username, credentials.password),
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        name: spec.username,
-        password: spec.password,
-        profile: spec.profile,
-        'limit-uptime': spec.sessionTimeoutSeconds ? `${spec.sessionTimeoutSeconds}s` : undefined,
-        'limit-bytes-total': spec.limitBytesTotal,
-        'shared-users': spec.sharedUsers?.toString(),
-      }),
+      body: JSON.stringify(payload),
       signal: AbortSignal.timeout(10000),
-    });
+    }).catch(() => null);
+
+    // Fallback to POST /rest/ip/hotspot/user/add (supported by mock-router and router scripts)
+    if (!res || res.status === 404 || res.status === 405) {
+      res = await fetch(`${endpoint}/rest/ip/hotspot/user/add`, {
+        method: 'POST',
+        headers: {
+          Authorization: this.basicAuth(credentials.username, credentials.password),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(10000),
+      });
+    }
+
     if (!res.ok) {
       throw new Error(`RouterOS create user failed: ${res.status} ${await res.text()}`);
     }

@@ -31,6 +31,9 @@ import { RoutersService } from './modules/routers/routers.service';
 import { SessionsController } from './modules/sessions/sessions.controller';
 import { SessionsService } from './modules/sessions/sessions.service';
 
+import { PortalController } from './modules/portal/portal.controller';
+import { PortalService } from './modules/portal/portal.service';
+
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -50,6 +53,7 @@ import { SessionsService } from './modules/sessions/sessions.service';
     VenuesController,
     RoutersController,
     SessionsController,
+    PortalController,
   ],
   providers: [
     PrismaService,
@@ -60,6 +64,7 @@ import { SessionsService } from './modules/sessions/sessions.service';
     VenuesService,
     RoutersService,
     SessionsService,
+    PortalService,
     PaymentFulfilmentQueue,
     PaymentFulfilmentProcessor,
     MikrotikProvisioningQueue,
