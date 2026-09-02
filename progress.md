@@ -33,3 +33,9 @@
 - [x] Created `RoutersService` and `RoutersController` (`GET /api/v1/routers`, `GET /api/v1/routers/:id`, `POST /api/v1/routers`).
 - [x] Implemented real-time router connectivity testing (`POST /api/v1/routers/:id/test`) and health diagnostics (`GET /api/v1/routers/:id/health`).
 - [x] Verified build integrity across all modules.
+
+### 5. HotSpot Sessions Management Module (PRD §8, §10, §28.4)
+- [x] Built `SessionsService` to track active sessions linked to venues, routers, and vouchers/orders.
+- [x] Implemented router-level session termination via `MikrotikAdapter.removeHotspotUser` on disconnect (`POST /api/v1/sessions/:id/disconnect`).
+- [x] Exposed `SessionsController` (`GET /api/v1/sessions`, `GET /api/v1/sessions/active`, `GET /api/v1/sessions/:id`, `POST /api/v1/sessions/:id/disconnect`).
+- [x] Integrated into `AppModule` and verified build.
