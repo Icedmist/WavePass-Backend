@@ -61,3 +61,8 @@
 - [x] Created `docker-compose.yml` defining orchestrated PostgreSQL, Redis (BullMQ), and API services with healthchecks.
 - [x] Installed `vitest` and created test suite (`test/plans.spec.ts`) validating plan calculations, duration conversions, and profile mappings.
 - [x] Verified 100% test passing and clean `nest build` production output.
+
+### 9. Upstash Serverless Redis & RouterOS Automated Configuration (PRD §6, §7, §28)
+- [x] Configured secure TLS Upstash Redis endpoint (`REDIS_URL`) in `.env` and verified active connectivity (PONG response).
+- [x] Created single-command MikroTik auto-configuration script (`docs/wavepass-setup.rsc`) to automate user creation, REST API enablement, walled garden bypass rules, and hotspot profiles in under 30 seconds.
+- [x] Synced and committed changes.
