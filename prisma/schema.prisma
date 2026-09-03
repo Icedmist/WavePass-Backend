@@ -68,6 +68,23 @@ enum RouterJobStatus {
   FAILED
 }
 
+enum VirtualAccountStatus {
+  ACTIVE
+  PENDING
+  FAILED
+  CLOSED
+}
+
+enum CashoutStatus {
+  PENDING
+  APPROVED
+  CONFIRMED
+  PROCESSING
+  COMPLETED
+  FAILED
+  REJECTED
+}
+
 model Venue {
   id        String   @id @default(uuid())
   name      String
@@ -85,6 +102,9 @@ model Venue {
   vouchers Voucher[]
   sessions Session[]
   auditLogs AuditLog[]
+  virtualAccount VirtualAccount?
+  bankAccounts   BankAccount[]
+  cashouts       Cashout[]
 }
 
 model User {
@@ -253,6 +273,69 @@ model RouterJob {
   router Router @relation(fields: [routerId], references: [id])
 
   @@index([routerId])
+  @@index([status])
+}
+
+model VirtualAccount {
+  id            String               @id @default(uuid())
+  venueId       String               @unique
+  provider      String               @default("paystack")
+  // Nexa platform holds the *single* Paystack key. Each venue gets ONE DVA
+  // so money lands in the platform settlement account regardless of venue.
+  customerCode  String?
+  accountNumber String
+  accountName   String?
+  bankName      String?
+  splitCode     String?
+  status        VirtualAccountStatus @default(ACTIVE)
+  metadata      Json?
+  createdAt     DateTime             @default(now())
+
+  venue Venue @relation(fields: [venueId], references: [id])
+}
+
+model BankAccount {
+  id                   String   @id @default(uuid())
+  venueId              String
+  accountName          String
+  accountNumber        String
+  bankCode             String
+  bankName             String?
+  currency             String   @default("NGN")
+  providerRecipientCode String? // Paystack Transfer Recipient code — cashout target
+  isDefault            Boolean  @default(false)
+  createdAt            DateTime @default(now())
+
+  venue    Venue    @relation(fields: [venueId], references: [id])
+  cashouts Cashout[]
+
+  @@index([venueId])
+}
+
+model Cashout {
+  id                    String        @id @default(uuid())
+  venueId               String
+  bankAccountId         String
+  amountMinor           Int
+  status                CashoutStatus @default(PENDING)
+  providerTransferCode  String?
+  providerTransferRef   String?
+  confirmedBy           String?       // admin identity that confirmed with password
+  requestedAt           DateTime      @default(now())
+  reviewedAt            DateTime?
+  confirmedAt           DateTime?
+  processedAt           DateTime?
+  completedAt           DateTime?
+  failedAt              DateTime?
+  failureReason         String?
+  rejectedAt            DateTime?
+  rejectReason          String?
+  createdAt             DateTime      @default(now())
+
+  venue       Venue       @relation(fields: [venueId], references: [id])
+  bankAccount BankAccount @relation(fields: [bankAccountId], references: [id])
+
+  @@index([venueId])
   @@index([status])
 }
 

@@ -66,3 +66,14 @@
 - [x] Configured secure TLS Upstash Redis endpoint (`REDIS_URL`) in `.env` and verified active connectivity (PONG response).
 - [x] Created single-command MikroTik auto-configuration script (`docs/wavepass-setup.rsc`) to automate user creation, REST API enablement, walled garden bypass rules, and hotspot profiles in under 30 seconds.
 - [x] Synced and committed changes.
+
+### 10. Single-Key Paystack + Dedicated Virtual Accounts & Password-Confirmed Cashout
+- [x] **Single-key model:** the platform (Nexa) owns ONE `PAYSTACK_SECRET_KEY`; merchants never hold their own keys.
+- [x] Added `VirtualAccount` model — a dedicated virtual account (DVA) per venue; all DVA payments settle into the single platform settlement account.
+- [x] Extended `PaystackService` with DVA (`customer`, `dedicated_account`), `transferrecipient`, `transfer`, `transfer/verify`, and `balance` methods + `isMock()`.
+- [x] Built `VirtualAccountsService` (`POST /api/v1/virtual-accounts`, `POST /api/v1/virtual-accounts/ensure/:venueId`, `GET /api/v1/virtual-accounts/venue/:venueId`, `GET /api/v1/virtual-accounts/:id`) with idempotent per-venue DVA + mock fallback.
+- [x] Added `BankAccount` + `Cashout` models; venue owner registers a NUBAN as the payout recipient.
+- [x] Built `CashoutsService` cashout pipeline: `venueBalance` → `requestCashout` (locks balance) → admin **password-confirmed** authorisation → Paystack Transfer finalisation.
+- [x] Exposed `CashoutsController` (`GET /api/v1/cashouts/balance/:venueId`, `POST /api/v1/cashouts/bank-accounts`, `GET /api/v1/cashouts/bank-accounts`, `POST /api/v1/cashouts`, `POST /api/v1/cashouts/confirm`, `POST /api/v1/cashouts/:id/reject`, `GET /api/v1/cashouts`).
+- [x] Admin password verified via constant-time HMAC compare against `ADMIN_PASSWORD_HASH` (or hashed `ADMIN_PASSWORD`).
+- [x] Verified clean `nest build` and passing vitest suite.
