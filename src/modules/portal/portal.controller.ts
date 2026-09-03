@@ -21,6 +21,12 @@ export class PortalController {
     return this.portal.simulatePayment(body);
   }
 
+  @Get('landing')
+  landing(@Query('mac') mac: string, @Query('ip') ip?: string) {
+    if (!mac) return { hasPaid: false, walledGardenOpen: true, message: 'mac required — walled garden open for portal' };
+    return this.portal.getLandingStatus(mac, ip);
+  }
+
   @Get('sessions/:mac')
   sessionStatus(@Param('mac') mac: string) {
     return this.portal.getSessionStatus(mac);

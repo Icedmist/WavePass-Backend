@@ -141,33 +141,82 @@ export class PortalService {
     };
   }
 
-  async getSessionStatus(mac: string) {
-    const normalized = mac.toUpperCase();
+  async getLandingStatus(mac: string, ip?: string) {
+    const normalized = mac.toUpperCase().trim();
     const session = await this.prisma.session.findFirst({
-      where: {
-        mac: normalized,
-        status: 'ACTIVE',
-      },
-      include: {
-        router: { select: { id: true, name: true, endpoint: true } },
-      },
+      where: { mac: normalized, status: 'ACTIVE' },
+      include: { router: { select: { id: true, name: true, endpoint: true } }, voucher: { include: { plan: true } } },
       orderBy: { startedAt: 'desc' },
     });
 
+    // Try to enrich with live router data (bytes, IP) if session exists
+    let live: any = null;
+    let dataUsedBytes = 0;
+    let dataLimitBytes: number | null = null;
+    let deviceIp = ip || session?.ip || null;
+    if (session?.router?.endpoint) {
+      try {
+        const { MikrotikAdapter } = await import('../mikrotik/mikrotik.adapter');
+        const adapter = new MikrotikAdapter();
+        const rows = await adapter.getActiveHotspotData(session.router.endpoint, {
+          username: process.env.MIKROTIK_API_USER || 'wavepass',
+          password: process.env.MIKROTIK_API_PASS || '',
+        });
+        live = rows.find((r: any) => String(r['mac-address'] || r.mac || '').toUpperCase() === normalized || String(r.user || '').toUpperCase() === normalized);
+        if (live) {
+          deviceIp = live.address || live.ip || deviceIp;
+          dataUsedBytes = Number(live['bytes-in'] || 0) + Number(live['bytes-out'] || 0);
+        }
+      } catch {}
+      const planLimit = (session as any)?.voucher?.plan?.dataLimitBytes ?? null;
+      dataLimitBytes = planLimit ? Number(planLimit) : null;
+    }
+
     if (!session) {
-      return { active: false, mac: normalized };
+      const venue = await this.venuesService.getDefaultVenue();
+      const plans = await this.plansService.listPlans(venue.id);
+      return {
+        hasPaid: false,
+        walledGardenOpen: true,
+        mac: normalized,
+        ip: deviceIp,
+        remainingMs: 0,
+        dataUsedBytes: 0,
+        dataLimitBytes: null,
+        dataExhaustedPct: 0,
+        paymentMethods: ['card', 'transfer', 'voucher'],
+        voucherAccess: true,
+        plans,
+        message: 'Not connected — choose a plan or enter voucher to open access.',
+      };
     }
 
     const now = Date.now();
     const expiresAt = session.expiresAt ? session.expiresAt.getTime() : now;
     const remainingMs = Math.max(0, expiresAt - now);
+    const hasPaid = remainingMs > 0;
+    const pct = dataLimitBytes ? Math.min(100, Math.round((dataUsedBytes / dataLimitBytes) * 100)) : 0;
 
     return {
-      active: remainingMs > 0,
-      sessionId: session.id,
+      hasPaid,
+      walledGardenOpen: true,
       mac: normalized,
+      ip: deviceIp,
+      sessionId: session.id,
       remainingMs,
       expiresAt: session.expiresAt,
+      startedAt: session.startedAt,
+      dataUsedBytes,
+      dataLimitBytes,
+      dataExhaustedPct: pct,
+      dataExhausted: pct >= 100,
+      paymentMethods: ['card', 'transfer', 'voucher'],
+      voucherAccess: true,
+      router: session.router,
     };
+  }
+
+  async getSessionStatus(mac: string) {
+    return this.getLandingStatus(mac);
   }
 }

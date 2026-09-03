@@ -95,6 +95,19 @@ export class MikrotikAdapter {
     }
   }
 
+  async getActiveHotspotData(endpoint: string, credentials: { username: string; password: string }) {
+    try {
+      const res = await fetch(`${endpoint}/rest/ip/hotspot/active`, {
+        headers: { Authorization: this.basicAuth(credentials.username, credentials.password) },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) return [];
+      return (await res.json()) as any[];
+    } catch {
+      return [];
+    }
+  }
+
   private basicAuth(user: string, pass: string): string {
     return `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
   }
