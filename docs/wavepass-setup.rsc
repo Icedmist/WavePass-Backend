@@ -17,11 +17,16 @@
 /ip/service/enable [find name="www"]
 /ip/service/enable [find name="www-ssl"]
 
-# 3. Add Paystack & WavePass domains to Hotspot Walled Garden (Bypass before login)
+# 3. Add Paystack, WavePass portal & backend to Hotspot Walled Garden (bypass before login — so any page hit shows landing)
+# The hotspot intercepts unauth HTTP and redirects to portal; walled garden keeps the landing + payments reachable.
 /ip/hotspot/walled-garden/ip add dst-host="*.paystack.co" action=accept comment="WavePass: Paystack API"
 /ip/hotspot/walled-garden/ip add dst-host="*.paystack.com" action=accept comment="WavePass: Paystack Checkout"
 /ip/hotspot/walled-garden/ip add dst-host="checkout.paystack.com" action=accept comment="WavePass: Paystack Checkout Host"
 /ip/hotspot/walled-garden/ip add dst-host="*.supabase.co" action=accept comment="WavePass: Supabase backend"
+/ip/hotspot/walled-garden/ip add dst-host="wavepass-web.vercel.app" action=accept comment="WavePass: Web portal (landing)"
+/ip/hotspot/walled-garden/ip add dst-host="*.vercel.app" action=accept comment="WavePass: Vercel portal"
+/ip/hotspot/walled-garden/ip add dst-host="techwithnexa.com" action=accept comment="WavePass: Nexa site"
+/ip/hotspot/walled-garden add dst-host="portal.wavepass.local" action=accept comment="WavePass: Local portal"
 
 # 4. Create Standard Plan User Profiles (1h, 12h, 24h)
 /ip/hotspot/user/profile add name="profile_1h" session-timeout=1h keepalive-timeout=2m shared-users=1 status-autorefresh=1m rate-limit="10M/5M" comment="WavePass 1-Hour Profile"

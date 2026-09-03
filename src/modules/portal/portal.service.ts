@@ -141,6 +141,25 @@ export class PortalService {
     };
   }
 
+  async getCaptiveRedirect(mac: string, ip?: string, linkOrig?: string, username?: string): Promise<string> {
+    const qs = new URLSearchParams();
+    if (mac) qs.set('mac', mac.toUpperCase());
+    if (ip) qs.set('ip', ip);
+    if (linkOrig) qs.set('link-orig', linkOrig);
+    if (username) qs.set('username', username);
+    // If device already has paid session, send it to success instead of new checkout
+    if (mac) {
+      try {
+        const s = await this.getLandingStatus(mac, ip);
+        if (s.hasPaid) {
+          qs.set('paid', '1');
+          return `${this.frontendUrl}/success?${qs.toString()}`;
+        }
+      } catch {}
+    }
+    return `${this.frontendUrl}/portal?${qs.toString()}`;
+  }
+
   async getLandingStatus(mac: string, ip?: string) {
     const normalized = mac.toUpperCase().trim();
     const session = await this.prisma.session.findFirst({
