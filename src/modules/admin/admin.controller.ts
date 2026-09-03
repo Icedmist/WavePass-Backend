@@ -1,9 +1,22 @@
-import { Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { createHash, timingSafeEqual } from 'crypto';
 import { AdminService } from './admin.service';
 
 @Controller('admin')
 export class AdminController {
   constructor(private readonly admin: AdminService) {}
+
+  @Post('verify-password')
+  verifyPassword(@Body() body: { password: string }) {
+    const hash =
+      process.env.ADMIN_PASSWORD_HASH ||
+      createHash('sha256').update(process.env.ADMIN_PASSWORD || 'wavepass-change-me').digest('hex');
+    const given = createHash('sha256').update(body.password || '').digest('hex');
+    const a = Buffer.from(given, 'utf8');
+    const b = Buffer.from(hash, 'utf8');
+    const ok = a.length === b.length && timingSafeEqual(a, b);
+    return { ok, role: ok ? 'admin' : null };
+  }
 
   @Get('stats')
   stats() {

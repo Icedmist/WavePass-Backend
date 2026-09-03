@@ -95,13 +95,13 @@ model Venue {
   status    String   @default("active")
   createdAt DateTime @default(now())
 
-  members  VenueMember[]
-  routers  Router[]
-  plans    Plan[]
-  orders   Order[]
-  vouchers Voucher[]
-  sessions Session[]
-  auditLogs AuditLog[]
+  members        VenueMember[]
+  routers        Router[]
+  plans          Plan[]
+  orders         Order[]
+  vouchers       Voucher[]
+  sessions       Session[]
+  auditLogs      AuditLog[]
   virtualAccount VirtualAccount?
   bankAccounts   BankAccount[]
   cashouts       Cashout[]
@@ -143,27 +143,27 @@ model Router {
   lastSeen       DateTime?
   createdAt      DateTime     @default(now())
 
-  venue Venue @relation(fields: [venueId], references: [id])
-  jobs  RouterJob[]
+  venue    Venue       @relation(fields: [venueId], references: [id])
+  jobs     RouterJob[]
   sessions Session[]
 
   @@index([venueId])
 }
 
 model Plan {
-  id              String   @id @default(uuid())
-  venueId         String
-  name            String
-  description     String?
-  priceMinor      Int
-  durationSeconds Int
-  dataLimitBytes  BigInt?
-  rateLimit       String?
-  simultaneousDevices Int  @default(1)
-  mode            PlanMode @default(ELAPSED)
-  version         Int      @default(1)
-  active          Boolean  @default(true)
-  createdAt       DateTime @default(now())
+  id                  String   @id @default(uuid())
+  venueId             String
+  name                String
+  description         String?
+  priceMinor          Int
+  durationSeconds     Int
+  dataLimitBytes      BigInt?
+  rateLimit           String?
+  simultaneousDevices Int      @default(1)
+  mode                PlanMode @default(ELAPSED)
+  version             Int      @default(1)
+  active              Boolean  @default(true)
+  createdAt           DateTime @default(now())
 
   venue    Venue     @relation(fields: [venueId], references: [id])
   orders   Order[]
@@ -173,15 +173,15 @@ model Plan {
 }
 
 model Order {
-  id           String      @id @default(uuid())
-  venueId      String
-  planId       String
-  customerRef  String?
-  amountMinor  Int
-  currency     String      @default("NGN")
-  status       OrderStatus @default(CREATED)
-  paymentProvider String   @default("paystack")
-  createdAt    DateTime    @default(now())
+  id              String      @id @default(uuid())
+  venueId         String
+  planId          String
+  customerRef     String?
+  amountMinor     Int
+  currency        String      @default("NGN")
+  status          OrderStatus @default(CREATED)
+  paymentProvider String      @default("paystack")
+  createdAt       DateTime    @default(now())
 
   venue   Venue    @relation(fields: [venueId], references: [id])
   plan    Plan     @relation(fields: [planId], references: [id])
@@ -195,7 +195,7 @@ model Payment {
   id                    String        @id @default(uuid())
   orderId               String        @unique
   provider              String        @default("paystack")
-  providerReference      String        @unique
+  providerReference     String        @unique
   providerTransactionId String?
   amountMinor           Int
   status                PaymentStatus @default(CREATED)
@@ -210,27 +210,27 @@ model Payment {
 }
 
 model Voucher {
-  id              String        @id @default(uuid())
-  venueId         String
-  planId          String
-  paymentId       String?
-  codeHash        String        @unique
-  displayCodeEnc  String? // encrypted, retrievable for printing
-  status          VoucherStatus @default(GENERATED)
-  issuedAt        DateTime      @default(now())
-  expiresAt       DateTime?
-  redeemedAt      DateTime?
-  firstLoginAt    DateTime?
-  consumedAt      DateTime?
-  revokedAt       DateTime?
+  id               String        @id @default(uuid())
+  venueId          String
+  planId           String
+  paymentId        String?
+  codeHash         String        @unique
+  displayCodeEnc   String? // encrypted, retrievable for printing
+  status           VoucherStatus @default(GENERATED)
+  issuedAt         DateTime      @default(now())
+  expiresAt        DateTime?
+  redeemedAt       DateTime?
+  firstLoginAt     DateTime?
+  consumedAt       DateTime?
+  revokedAt        DateTime?
   redeemedDeviceId String?
-  redeemedIp      String?
-  redeemedMac     String?
-  createdBy       String?
+  redeemedIp       String?
+  redeemedMac      String?
+  createdBy        String?
 
-  venue   Venue    @relation(fields: [venueId], references: [id])
-  plan    Plan     @relation(fields: [planId], references: [id])
-  payment Payment? @relation(fields: [paymentId], references: [id])
+  venue    Venue     @relation(fields: [venueId], references: [id])
+  plan     Plan      @relation(fields: [planId], references: [id])
+  payment  Payment?  @relation(fields: [paymentId], references: [id])
   sessions Session[]
 
   @@index([venueId])
@@ -295,42 +295,42 @@ model VirtualAccount {
 }
 
 model BankAccount {
-  id                   String   @id @default(uuid())
-  venueId              String
-  accountName          String
-  accountNumber        String
-  bankCode             String
-  bankName             String?
-  currency             String   @default("NGN")
+  id                    String   @id @default(uuid())
+  venueId               String
+  accountName           String
+  accountNumber         String
+  bankCode              String
+  bankName              String?
+  currency              String   @default("NGN")
   providerRecipientCode String? // Paystack Transfer Recipient code — cashout target
-  isDefault            Boolean  @default(false)
-  createdAt            DateTime @default(now())
+  isDefault             Boolean  @default(false)
+  createdAt             DateTime @default(now())
 
-  venue    Venue    @relation(fields: [venueId], references: [id])
+  venue    Venue     @relation(fields: [venueId], references: [id])
   cashouts Cashout[]
 
   @@index([venueId])
 }
 
 model Cashout {
-  id                    String        @id @default(uuid())
-  venueId               String
-  bankAccountId         String
-  amountMinor           Int
-  status                CashoutStatus @default(PENDING)
-  providerTransferCode  String?
-  providerTransferRef   String?
-  confirmedBy           String?       // admin identity that confirmed with password
-  requestedAt           DateTime      @default(now())
-  reviewedAt            DateTime?
-  confirmedAt           DateTime?
-  processedAt           DateTime?
-  completedAt           DateTime?
-  failedAt              DateTime?
-  failureReason         String?
-  rejectedAt            DateTime?
-  rejectReason          String?
-  createdAt             DateTime      @default(now())
+  id                   String        @id @default(uuid())
+  venueId              String
+  bankAccountId        String
+  amountMinor          Int
+  status               CashoutStatus @default(PENDING)
+  providerTransferCode String?
+  providerTransferRef  String?
+  confirmedBy          String? // admin identity that confirmed with password
+  requestedAt          DateTime      @default(now())
+  reviewedAt           DateTime?
+  confirmedAt          DateTime?
+  processedAt          DateTime?
+  completedAt          DateTime?
+  failedAt             DateTime?
+  failureReason        String?
+  rejectedAt           DateTime?
+  rejectReason         String?
+  createdAt            DateTime      @default(now())
 
   venue       Venue       @relation(fields: [venueId], references: [id])
   bankAccount BankAccount @relation(fields: [bankAccountId], references: [id])
@@ -340,14 +340,14 @@ model Cashout {
 }
 
 model WebhookEvent {
-  id             String   @id @default(uuid())
-  provider       String   @default("paystack")
-  eventKey       String   @unique
+  id             String    @id @default(uuid())
+  provider       String    @default("paystack")
+  eventKey       String    @unique
   signatureValid Boolean
   payloadJson    Json
   processedAt    DateTime?
-  status         String   @default("received")
-  createdAt      DateTime @default(now())
+  status         String    @default("received")
+  createdAt      DateTime  @default(now())
 
   @@index([provider])
 }

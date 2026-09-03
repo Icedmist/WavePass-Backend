@@ -19,6 +19,12 @@ CREATE TYPE "SessionStatus" AS ENUM ('ACTIVE', 'ENDED', 'EXPIRED');
 -- CreateEnum
 CREATE TYPE "RouterJobStatus" AS ENUM ('QUEUED', 'RUNNING', 'SUCCEEDED', 'RETRY_WAIT', 'FAILED');
 
+-- CreateEnum
+CREATE TYPE "VirtualAccountStatus" AS ENUM ('ACTIVE', 'PENDING', 'FAILED', 'CLOSED');
+
+-- CreateEnum
+CREATE TYPE "CashoutStatus" AS ENUM ('PENDING', 'APPROVED', 'CONFIRMED', 'PROCESSING', 'COMPLETED', 'FAILED', 'REJECTED');
+
 -- CreateTable
 CREATE TABLE "Venue" (
     "id" TEXT NOT NULL,
@@ -178,6 +184,63 @@ CREATE TABLE "RouterJob" (
 );
 
 -- CreateTable
+CREATE TABLE "VirtualAccount" (
+    "id" TEXT NOT NULL,
+    "venueId" TEXT NOT NULL,
+    "provider" TEXT NOT NULL DEFAULT 'paystack',
+    "customerCode" TEXT,
+    "accountNumber" TEXT NOT NULL,
+    "accountName" TEXT,
+    "bankName" TEXT,
+    "splitCode" TEXT,
+    "status" "VirtualAccountStatus" NOT NULL DEFAULT 'ACTIVE',
+    "metadata" JSONB,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "VirtualAccount_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "BankAccount" (
+    "id" TEXT NOT NULL,
+    "venueId" TEXT NOT NULL,
+    "accountName" TEXT NOT NULL,
+    "accountNumber" TEXT NOT NULL,
+    "bankCode" TEXT NOT NULL,
+    "bankName" TEXT,
+    "currency" TEXT NOT NULL DEFAULT 'NGN',
+    "providerRecipientCode" TEXT,
+    "isDefault" BOOLEAN NOT NULL DEFAULT false,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "BankAccount_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "Cashout" (
+    "id" TEXT NOT NULL,
+    "venueId" TEXT NOT NULL,
+    "bankAccountId" TEXT NOT NULL,
+    "amountMinor" INTEGER NOT NULL,
+    "status" "CashoutStatus" NOT NULL DEFAULT 'PENDING',
+    "providerTransferCode" TEXT,
+    "providerTransferRef" TEXT,
+    "confirmedBy" TEXT,
+    "requestedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "reviewedAt" TIMESTAMP(3),
+    "confirmedAt" TIMESTAMP(3),
+    "processedAt" TIMESTAMP(3),
+    "completedAt" TIMESTAMP(3),
+    "failedAt" TIMESTAMP(3),
+    "failureReason" TEXT,
+    "rejectedAt" TIMESTAMP(3),
+    "rejectReason" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "Cashout_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "WebhookEvent" (
     "id" TEXT NOT NULL,
     "provider" TEXT NOT NULL DEFAULT 'paystack',
@@ -254,6 +317,18 @@ CREATE INDEX "RouterJob_routerId_idx" ON "RouterJob"("routerId");
 CREATE INDEX "RouterJob_status_idx" ON "RouterJob"("status");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "VirtualAccount_venueId_key" ON "VirtualAccount"("venueId");
+
+-- CreateIndex
+CREATE INDEX "BankAccount_venueId_idx" ON "BankAccount"("venueId");
+
+-- CreateIndex
+CREATE INDEX "Cashout_venueId_idx" ON "Cashout"("venueId");
+
+-- CreateIndex
+CREATE INDEX "Cashout_status_idx" ON "Cashout"("status");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "WebhookEvent_eventKey_key" ON "WebhookEvent"("eventKey");
 
 -- CreateIndex
@@ -303,6 +378,18 @@ ALTER TABLE "Session" ADD CONSTRAINT "Session_voucherId_fkey" FOREIGN KEY ("vouc
 
 -- AddForeignKey
 ALTER TABLE "RouterJob" ADD CONSTRAINT "RouterJob_routerId_fkey" FOREIGN KEY ("routerId") REFERENCES "Router"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "VirtualAccount" ADD CONSTRAINT "VirtualAccount_venueId_fkey" FOREIGN KEY ("venueId") REFERENCES "Venue"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "BankAccount" ADD CONSTRAINT "BankAccount_venueId_fkey" FOREIGN KEY ("venueId") REFERENCES "Venue"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Cashout" ADD CONSTRAINT "Cashout_venueId_fkey" FOREIGN KEY ("venueId") REFERENCES "Venue"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Cashout" ADD CONSTRAINT "Cashout_bankAccountId_fkey" FOREIGN KEY ("bankAccountId") REFERENCES "BankAccount"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "AuditLog" ADD CONSTRAINT "AuditLog_venueId_fkey" FOREIGN KEY ("venueId") REFERENCES "Venue"("id") ON DELETE SET NULL ON UPDATE CASCADE;

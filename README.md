@@ -107,6 +107,36 @@ The script automatically:
 
 ---
 
+## 💳 Single-Key Paystack (Nexa) — Per-Venue DVA + Auto-Cashout
+
+One **Nexa** `PAYSTACK_SECRET_KEY` powers the whole platform. Each venue gets a **Dedicated Virtual Account (DVA)** — guest transfers land in the platform settlement account, not a per-merchant key.
+
+- `POST /api/v1/virtual-accounts/ensure/:venueId` — idempotent DVA provisioning (real Paystack or mock fallback).
+- Venue owner registers payout bank: `POST /api/v1/cashouts/bank-accounts` (creates Paystack transfer recipient).
+- **Auto-cashout** — `POST /api/v1/cashouts` `{venueId, amountMinor, password}` verifies the **owner's cashout password** (`OWNER_CASHOUT_PASSWORD_HASH` / `ADMIN_PASSWORD_HASH` fallback), checks `availableMinor = earned − locked`, and immediately executes Paystack `transfer` → `verify` (mock marks `COMPLETED`).
+- Back-compat pending cashouts: `POST /api/v1/cashouts/confirm` with owner/admin password.
+
+## 🔐 Admin Password
+
+- `ADMIN_PASSWORD` / `ADMIN_PASSWORD_HASH` (sha256 hex, `timingSafeEqual`) — platform admin (default `NexaAdmin#2025!WavePass`).
+- `OWNER_CASHOUT_PASSWORD` / `OWNER_CASHOUT_PASSWORD_HASH` (default `WaveOwner#2025!Cashout`) — venue owner auto-cashout. Falls back to admin hash.
+- `POST /api/v1/admin/verify-password` — verify admin credential; admin stats/reconcile/cleanup are elevated.
+
+## 🗃️ Supabase — Single Source of Truth
+
+All domain data lives in **Supabase Postgres** (`DATABASE_URL` pooler). The schema (`prisma/supabase-schema.sql`, 15 tables including `VirtualAccount`, `BankAccount`, `Cashout`) is the canonical DDL — the mobile app, web portal and backend all read/write the same Supabase project (`vvoenmdzavyzlisykhks`):
+
+- Billing: `Venue → Plan → Order → Payment → WebhookEvent`
+- Access: `Voucher (codeHash) → Session → RouterJob`
+- Payouts: `VirtualAccount (1:1 Venue) → BankAccount → Cashout`
+- Ops: `User ↔ VenueMember, AuditLog`
+
+Push changes with `npx prisma db push` then `npx prisma generate`. Keep `.env` pooler URLs in sync.
+
+## 🎨 Branding
+
+New WavePass mark (`logo.png` — black squircle, white ribbon-W + Wi-Fi arcs) lives in `wavepass-design/logo/`, mirrored to `wavepass-web/public/logo.png` and `wavepass-android/assets/images/logo.png` (+ resized `mipmap-*` launchers).
+
 ## 🛠️ Local Development & Testing
 
 ```bash
@@ -124,6 +154,10 @@ pnpm build
 
 # 5. Start API server on :3000
 pnpm start:dev
+
+# 6. Sync Supabase schema (regenerates prisma/supabase-schema.sql)
+npx prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script > prisma/supabase-schema.sql
+npx prisma db push
 ```
 
 ---
@@ -156,6 +190,13 @@ docker build -t wavepass-api .
 | `POST` | `/api/v1/portal/simulate-payment` | 1-Click offline payment simulation |
 | `GET` | `/api/v1/portal/sessions/:mac` | Live countdown status for guest MAC |
 | `POST` | `/api/v1/payments/paystack/webhook` | Paystack HMAC-verified payment webhook |
+| `GET` | `/api/v1/cashouts/balance/:venueId` | Venue available balance (earned − locked) |
+| `POST` | `/api/v1/cashouts/bank-accounts` | Register payout NUBAN (Paystack recipient) |
+| `POST` | `/api/v1/cashouts` | Auto-cashout (owner password, instant transfer) |
+| `POST` | `/api/v1/cashouts/confirm` | Confirm pending cashout (owner/admin password) |
+| `GET` | `/api/v1/virtual-accounts/venue/:venueId` | Venue DVA (accountNumber/bank) |
+| `POST` | `/api/v1/virtual-accounts/ensure/:venueId` | Ensure DVA per venue (idempotent) |
+| `POST` | `/api/v1/admin/verify-password` | Verify platform admin password |
 | `GET` | `/api/v1/admin/stats` | Live revenue, ARPU, plan sales, and session stats |
 | `POST` | `/api/v1/admin/reconcile` | Self-healing session reconciliation |
 | `POST` | `/api/v1/admin/cleanup` | Delete expired users on RouterOS |

@@ -21,26 +21,47 @@ import { RegisterBankAccountDto } from './dto/register-bank-account.dto';
 @Injectable()
 export class CashoutsService {
   private readonly logger = new Logger(CashoutsService.name);
-  private readonly cashoutPasswordHash =
+  // Admin platform password — elevated ops (reconcile, reject, cross-venue)
+  private readonly adminPasswordHash =
     process.env.ADMIN_PASSWORD_HASH ||
     createHash('sha256').update(process.env.ADMIN_PASSWORD || 'wavepass-change-me').digest('hex');
+  // Venue-owner cashout password — auto-cashout without admin gate
+  private readonly ownerPasswordHash =
+    process.env.OWNER_CASHOUT_PASSWORD_HASH ||
+    process.env.ADMIN_PASSWORD_HASH ||
+    createHash('sha256').update(
+      process.env.OWNER_CASHOUT_PASSWORD || process.env.ADMIN_PASSWORD || 'wavepass-change-me',
+    ).digest('hex');
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly paystack: PaystackService,
   ) {}
 
-  private verifyPassword(password: string): boolean {
+  /** Owner password — gates auto-cashout (fast, per-venue). Falls back to admin hash. */
+  private verifyOwnerPassword(password: string): boolean {
     const given = createHash('sha256').update(password).digest('hex');
     const a = Buffer.from(given, 'utf8');
-    const b = Buffer.from(this.cashoutPasswordHash, 'utf8');
+    // accept either owner hash or admin hash (admin can also cash out)
+    for (const hash of [this.ownerPasswordHash, this.adminPasswordHash]) {
+      const b = Buffer.from(hash, 'utf8');
+      if (a.length === b.length && timingSafeEqual(a, b)) return true;
+    }
+    return false;
+  }
+
+  /** Admin password — elevated ops only. */
+  private verifyAdminPassword(password: string): boolean {
+    const given = createHash('sha256').update(password).digest('hex');
+    const a = Buffer.from(given, 'utf8');
+    const b = Buffer.from(this.adminPasswordHash, 'utf8');
     if (a.length !== b.length) return false;
     return timingSafeEqual(a, b);
   }
 
-  /** Back-compat alias — some older call sites use `verifyAdminPassword`. */
-  private verifyAdminPassword(password: string): boolean {
-    return this.verifyPassword(password);
+  /** Back-compat alias */
+  private verifyPassword(password: string): boolean {
+    return this.verifyOwnerPassword(password);
   }
 
   private async executeTransfer(cashout: any, bank: any) {
@@ -168,8 +189,8 @@ export class CashoutsService {
   }
 
   async requestCashout(dto: RequestCashoutDto) {
-    if (!this.verifyPassword(dto.password)) {
-      throw new UnauthorizedException('Invalid password — cashout not authorised');
+    if (!this.verifyOwnerPassword(dto.password)) {
+      throw new UnauthorizedException('Invalid owner password — cashout not authorised');
     }
 
     const venue = await this.prisma.venue.findUnique({ where: { id: dto.venueId } });
