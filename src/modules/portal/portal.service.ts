@@ -8,7 +8,7 @@ import { VenuesService } from '../venues/venues.service';
 
 @Injectable()
 export class PortalService {
-  private readonly frontendUrl = process.env.FRONTEND_URL || 'http://localhost:8000';
+  private readonly frontendUrl = process.env.FRONTEND_URL || 'https://nexawavepass.com';
   private readonly paystackSecret = process.env.PAYSTACK_SECRET_KEY || '';
 
   constructor(
