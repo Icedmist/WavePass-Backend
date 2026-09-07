@@ -1,43 +1,48 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
-import { createHash, timingSafeEqual } from 'crypto';
+import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { AdminService } from './admin.service';
+import { AdminAuthService } from './admin-auth.service';
+import { AdminAuthGuard } from './admin-auth.guard';
 
 @Controller('admin')
 export class AdminController {
-  constructor(private readonly admin: AdminService) {}
+  constructor(
+    private readonly admin: AdminService,
+    private readonly auth: AdminAuthService,
+  ) {}
 
   @Post('verify-password')
   verifyPassword(@Body() body: { password: string }) {
-    const hash =
-      process.env.ADMIN_PASSWORD_HASH ||
-      createHash('sha256').update(process.env.ADMIN_PASSWORD || 'wavepass-change-me').digest('hex');
-    const given = createHash('sha256').update(body.password || '').digest('hex');
-    const a = Buffer.from(given, 'utf8');
-    const b = Buffer.from(hash, 'utf8');
-    const ok = a.length === b.length && timingSafeEqual(a, b);
-    return { ok, role: ok ? 'admin' : null };
+    const ok = this.auth.verifyPassword(body.password || '');
+    if (!ok) return { ok: false, role: null };
+    const { token, expiresIn } = this.auth.signAdminToken();
+    return { ok: true, role: 'admin', token, expiresIn };
   }
 
+  @UseGuards(AdminAuthGuard)
   @Get('stats')
   stats() {
     return this.admin.getStats();
   }
 
+  @UseGuards(AdminAuthGuard)
   @Get('webhook-logs')
   webhookLogs(@Query('limit') limit?: string) {
     return this.admin.getWebhookLogs(limit ? parseInt(limit, 10) : 50);
   }
 
+  @UseGuards(AdminAuthGuard)
   @Post('reconcile')
   reconcile(@Query('venueId') venueId?: string) {
     return this.admin.reconcile(venueId);
   }
 
+  @UseGuards(AdminAuthGuard)
   @Post('cleanup')
   cleanup(@Query('venueId') venueId?: string) {
     return this.admin.cleanup(venueId);
   }
 
+  @UseGuards(AdminAuthGuard)
   @Get('verify/:reference')
   verifyReference(@Param('reference') reference: string) {
     return this.admin.verifyReference(reference);

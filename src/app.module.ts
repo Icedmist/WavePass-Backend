@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { BullModule } from '@nestjs/bullmq';
+import { JwtModule } from '@nestjs/jwt';
 import { PrismaService } from './common/prisma.service';
 
 import { PaystackController } from './modules/paystack/paystack.controller';
@@ -36,6 +37,8 @@ import { PortalService } from './modules/portal/portal.service';
 
 import { AdminController } from './modules/admin/admin.controller';
 import { AdminService } from './modules/admin/admin.service';
+import { AdminAuthService } from './modules/admin/admin-auth.service';
+import { AdminAuthGuard } from './modules/admin/admin-auth.guard';
 
 import { VirtualAccountsController } from './modules/virtual-accounts/virtual-accounts.controller';
 import { VirtualAccountsService } from './modules/virtual-accounts/virtual-accounts.service';
@@ -46,6 +49,10 @@ import { CashoutsService } from './modules/cashouts/cashouts.service';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    JwtModule.register({
+      secret: process.env.JWT_SECRET || 'wavepass-change-me-jwt',
+      signOptions: { expiresIn: (process.env.ADMIN_JWT_EXPIRES_IN || '2h') as any },
+    }),
     BullModule.forRoot({
       connection: { url: process.env.REDIS_URL || 'redis://localhost:6379' },
     }),
@@ -78,6 +85,8 @@ import { CashoutsService } from './modules/cashouts/cashouts.service';
     SessionsService,
     PortalService,
     AdminService,
+    AdminAuthService,
+    AdminAuthGuard,
     PaymentFulfilmentQueue,
     PaymentFulfilmentProcessor,
     MikrotikProvisioningQueue,
