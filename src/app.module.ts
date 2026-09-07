@@ -48,6 +48,8 @@ import { VirtualAccountsService } from './modules/virtual-accounts/virtual-accou
 import { CashoutsController } from './modules/cashouts/cashouts.controller';
 import { CashoutsService } from './modules/cashouts/cashouts.service';
 
+import { HealthController } from './modules/health/health.controller';
+
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -92,6 +94,7 @@ import { CashoutsService } from './modules/cashouts/cashouts.service';
     AdminController,
     VirtualAccountsController,
     CashoutsController,
+    HealthController,
   ],
   providers: [
     {
