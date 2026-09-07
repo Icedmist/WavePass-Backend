@@ -9,6 +9,8 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml* ./
 COPY prisma ./prisma/
 
 RUN pnpm install --frozen-lockfile
+RUN yes | pnpm approve-builds || true
+RUN pnpm install --frozen-lockfile
 RUN npx prisma generate
 
 COPY tsconfig*.json nest-cli.json ./
