@@ -31,11 +31,11 @@ services:
   envs:
   - { key: DATABASE_URL, value: ${DATABASE_URL}, type: SECRET }
   - { key: REDIS_URL, value: ${REDIS_URL}, type: SECRET }
-  - { key: FRONTEND_URL, value: https://your-venue.wavepass.com }
+  - { key: FRONTEND_URL, value: https://your-venue.nexawavepass.com }
   - { key: JWT_SECRET, value: ${JWT_SECRET}, type: SECRET }
 ```
 
-App URL: `https://wavepass-api-xxxxx.ondigitalocean.app` — add custom domain `api.your-venue.wavepass.com`.
+App URL: `https://wavepass-api-xxxxx.ondigitalocean.app` — add custom domain `api.your-venue.nexawavepass.com`.
 
 ## Droplet (VM, $6/mo, gives root for WireGuard tunnel mode)
 

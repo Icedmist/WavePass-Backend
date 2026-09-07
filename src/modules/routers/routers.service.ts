@@ -81,7 +81,7 @@ export class RoutersService {
   }
 
   generateProvisionScript(routerId: string) {
-    const frontendUrl = process.env.FRONTEND_URL || 'https://wavepass-web.vercel.app';
+    const frontendUrl = process.env.FRONTEND_URL || 'https://nexawavepass.com';
     return `# WavePass Cloud Provisioning Script (RouterOS v7)
 # Generated dynamically for Gateway ID: ${routerId}
 
@@ -98,7 +98,8 @@ export class RoutersService {
 /ip hotspot walled-garden add dst-host="*.paystack.co" action=allow
 /ip hotspot walled-garden add dst-host="*.paystack.com" action=allow
 /ip hotspot walled-garden add dst-host="*.supabase.co" action=allow
-/ip hotspot walled-garden add dst-host="wavepass-web.vercel.app" action=allow
+/ip hotspot walled-garden add dst-host="nexawavepass.com" action=allow
+/ip hotspot walled-garden add dst-host="*.nexawavepass.com" action=allow
 `;
   }
 }

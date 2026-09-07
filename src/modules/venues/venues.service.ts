@@ -42,7 +42,7 @@ export class VenuesService {
 
   async getVenueByHost(host: string) {
     const clean = host.split(':')[0].toLowerCase();
-    // host like my-venue.wavepass.com, my-venue.wavepass.techwithnexa.com, or localhost:3000
+    // host like my-venue.nexawavepass.com or localhost:3000
     const parts = clean.split('.');
     // skip bare domains and localhost
     if (clean === 'localhost' || clean === '127.0.0.1' || parts.length < 3) {
@@ -80,7 +80,7 @@ export class VenuesService {
           slug: 'default',
           timezone: 'Africa/Lagos',
           currency: 'NGN',
-          logoUrl: 'https://wavepass-web.vercel.app/logo.png',
+          logoUrl: 'https://nexawavepass.com/logo.png',
         },
         include: { routers: true, plans: { where: { active: true } } },
       });

@@ -17,7 +17,7 @@ oci container-instances container-instance create \
   --availability-domain <AD-1> \
   --shape CI.Standard.E4.Flex --shape-config ocpus=1,memoryInGBs=2 \
   --vnics '[{"subnetId":"ocid1.subnet...","isPublicIpAssigned":true}]' \
-  --containers '[{"imageUrl":"lhr.ocir.io/<tenancy>/wavepass-api:latest","displayName":"wavepass-api","environmentVariables":{"DATABASE_URL":"postgresql://...","REDIS_URL":"rediss://...","FRONTEND_URL":"https://your-venue.wavepass.com","JWT_SECRET":"...","ADMIN_PASSWORD_HASH":"dae30fd40..."}}]' \
+  --containers '[{"imageUrl":"lhr.ocir.io/<tenancy>/wavepass-api:latest","displayName":"wavepass-api","environmentVariables":{"DATABASE_URL":"postgresql://...","REDIS_URL":"rediss://...","FRONTEND_URL":"https://your-venue.nexawavepass.com","JWT_SECRET":"...","ADMIN_PASSWORD_HASH":"dae30fd40..."}}]' \
   --display-name wavepass-api
 ```
 
@@ -35,4 +35,4 @@ See `k8s/` examples or use `docker-compose.yml` on a single OCI VM (`VM.Standard
 
 ## Env
 
-Same `/tmp/clean.env` as Cloud Run (strip `PORT` + `""`). Required: `DATABASE_URL`, `DIRECT_DATABASE_URL`, `REDIS_URL`, `SUPABASE_URL`, `PAYSTACK_SECRET_KEY`, `FRONTEND_URL` (your subdomain e.g. `https://my-venue.wavepass.com`), `JWT_SECRET`, `ADMIN_PASSWORD_HASH`.
+Same `/tmp/clean.env` as Cloud Run (strip `PORT` + `""`). Required: `DATABASE_URL`, `DIRECT_DATABASE_URL`, `REDIS_URL`, `SUPABASE_URL`, `PAYSTACK_SECRET_KEY`, `FRONTEND_URL` (your subdomain e.g. `https://my-venue.nexawavepass.com`), `JWT_SECRET`, `ADMIN_PASSWORD_HASH`.

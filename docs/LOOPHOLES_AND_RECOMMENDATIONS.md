@@ -14,15 +14,15 @@ Audited `wavepass-backend` (NestJS Fastify + BullMQ + Prisma/Supabase + Upstash 
 
 ### 3. CORS `origin: true, credentials: true` (`src/main.ts:30`)
 - **Loophole:** Reflects any `Origin` while allowing cookies/auth headers → CSRF on `POST /cashouts`.
-- **Fixed:** Allow-list from `FRONTEND_URL` (comma-separated, e.g. `https://my-venue.wavepass.com,https://wavepass-web.vercel.app`), default to single `FRONTEND_URL`.
+- **Fixed:** Allow-list from `FRONTEND_URL` (comma-separated, e.g. `https://my-venue.nexawavepass.com,https://nexawavepass.com`), default to single `FRONTEND_URL`.
 
 ### 4. No Prisma migrations
 - **Loophole:** `supabase-schema.sql` + `prisma db push` is not versioned/reversible; `schema.prisma` changes (e.g. `VirtualAccount` added) were `db push` ad-hoc.
 - **Fixed:** `npx prisma migrate dev --name init` baseline created under `prisma/migrations/` (additive, no data wipe). Future changes must use `migrate`, not `db push`.
 
 ### 5. HotSpot walled garden bypass
-- **Loophole:** If `wavepass-setup.rsc:21` misses `wavepass-web.vercel.app` or `*.vercel.app`, unpaid devices cannot reach `/portal` after captive 302 → infinite redirect loop. Conversely, if `*.wavepass.com` is too permissive, paid users could bypass via DNS trick.
-- **Fix:** Script now adds `wavepass-web.vercel.app`, `*.vercel.app`, `techwithnexa.com` + `portal.wavepass.local`. On tunnel mode (`10.8.0.x`), still needs relay VM — document that.
+- **Loophole:** If `wavepass-setup.rsc:21` misses `nexawavepass.com` or `*.nexawavepass.com`, unpaid devices cannot reach `/portal` after captive 302 → infinite redirect loop. Conversely, if `*.nexawavepass.com` is too permissive, paid users could bypass via DNS trick.
+- **Fix:** Script now adds `nexawavepass.com`, `*.nexawavepass.com`, `*.vercel.app` + `portal.nexawavepass.local`. On tunnel mode (`10.8.0.x`), still needs relay VM — document that.
 
 ## HIGH — Business/Integrity
 
@@ -45,7 +45,7 @@ Audited `wavepass-backend` (NestJS Fastify + BullMQ + Prisma/Supabase + Upstash 
 
 ### 10. Captive portal not universal on HTTPS
 - **Loophole:** Modern phones probe `https://connectivitycheck.gstatic.com` — Hotspot only intercepts `http://`, so `https://example.com` shows cert error, not landing.
-- **Rec:** Document that venues must keep `http://portal.wavepass.com` bookmark and that Android `CaptivePortalLogin` (http) will still trigger; consider DNS hijack for `https`.
+- **Rec:** Document that venues must keep `http://portal.nexawavepass.com` bookmark and that Android `CaptivePortalLogin` (http) will still trigger; consider DNS hijack for `https`.
 
 ### 11. Heroku-style `MOCK_ROUTER_URL=http://localhost:3001` in prod `.env`
 - **Rec:** Override `MOCK_ROUTER_URL` to real router endpoint per venue; otherwise `MikrotikAdapter` falls back to mock and sessions appear `ACTIVE` while router is offline.

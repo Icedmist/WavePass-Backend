@@ -59,7 +59,7 @@ gcloud run deploy wavepass-api \
   --image us-central1-docker.pkg.dev/PROJECT/wavepass/api:latest \
   --region us-central1 --allow-unauthenticated --port 3000 \
   --set-secrets DATABASE_URL=DATABASE_URL:latest,REDIS_URL=REDIS_URL:latest \
-  --set-env-vars FRONTEND_URL=https://wavepass-web.vercel.app,NODE_ENV=production
+  --set-env-vars FRONTEND_URL=https://nexawavepass.com,NODE_ENV=production
 ```
 
 Check: `gcloud run services describe wavepass-api --region us-central1` → `https://wavepass-api-...run.app`

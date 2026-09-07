@@ -6,7 +6,7 @@ export class CreateVenueDto {
   name: string;
 
   @IsString()
-  @Matches(/^[a-z0-9-]+$/, { message: 'slug must be lowercase a-z, 0-9, hyphen and will be used as subdomain (e.g. my-venue.wavepass.com)' })
+  @Matches(/^[a-z0-9-]+$/, { message: 'slug must be lowercase a-z, 0-9, hyphen and will be used as subdomain (e.g. my-venue.nexawavepass.com)' })
   slug: string;
 
   @IsOptional()
