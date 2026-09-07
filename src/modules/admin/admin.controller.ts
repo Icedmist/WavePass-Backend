@@ -1,8 +1,10 @@
 import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { AdminService } from './admin.service';
 import { AdminAuthService } from './admin-auth.service';
 import { AdminAuthGuard } from './admin-auth.guard';
 
+@Throttle({ strict: { ttl: 60000, limit: 10 } })
 @Controller('admin')
 export class AdminController {
   constructor(

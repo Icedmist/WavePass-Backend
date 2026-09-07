@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Param, Post, Query, Req, Res } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { FastifyReply, FastifyRequest } from 'fastify';
 import { PortalService } from './portal.service';
 import { InitPaymentDto } from './dto/init-payment.dto';
@@ -12,11 +13,13 @@ export class PortalController {
     return this.portal.getPortalPlans(venueId);
   }
 
+  @Throttle({ portal: { ttl: 60000, limit: 20 } })
   @Post('init-payment')
   initPayment(@Body() dto: InitPaymentDto) {
     return this.portal.initPayment(dto);
   }
 
+  @Throttle({ portal: { ttl: 60000, limit: 20 } })
   @Post('simulate-payment')
   simulatePayment(@Body() body: { mac: string; planId: string; venueId?: string }) {
     return this.portal.simulatePayment(body);

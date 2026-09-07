@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { BullModule } from '@nestjs/bullmq';
 import { JwtModule } from '@nestjs/jwt';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { PrismaService } from './common/prisma.service';
 
 import { PaystackController } from './modules/paystack/paystack.controller';
@@ -53,6 +55,23 @@ import { CashoutsService } from './modules/cashouts/cashouts.service';
       secret: process.env.JWT_SECRET || 'wavepass-change-me-jwt',
       signOptions: { expiresIn: (process.env.ADMIN_JWT_EXPIRES_IN || '2h') as any },
     }),
+    ThrottlerModule.forRoot([
+      {
+        name: 'default',
+        ttl: 60000,
+        limit: 60,
+      },
+      {
+        name: 'strict',
+        ttl: 60000,
+        limit: 10,
+      },
+      {
+        name: 'portal',
+        ttl: 60000,
+        limit: 20,
+      },
+    ]),
     BullModule.forRoot({
       connection: { url: process.env.REDIS_URL || 'redis://localhost:6379' },
     }),
@@ -75,6 +94,10 @@ import { CashoutsService } from './modules/cashouts/cashouts.service';
     CashoutsController,
   ],
   providers: [
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
     PrismaService,
     PaystackService,
     OrdersService,

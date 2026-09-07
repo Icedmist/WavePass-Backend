@@ -7,6 +7,7 @@ import {
   Post,
   Req,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { FastifyRequest } from 'fastify';
 import { PaystackService } from './paystack.service';
 import { PrismaService } from '../../common/prisma.service';
@@ -20,6 +21,7 @@ export class PaystackController {
     private readonly fulfilmentQueue: PaymentFulfilmentQueue,
   ) {}
 
+  @Throttle({ strict: { ttl: 60000, limit: 10 } })
   @Post('initialize')
   async initialize(@Body() body: { orderId: string; email: string }) {
     const order = await this.prisma.order.findUniqueOrThrow({ where: { id: body.orderId } });
