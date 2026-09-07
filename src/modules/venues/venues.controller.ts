@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Param, Post, Query } from '@nestjs/common';
 import { VenuesService } from './venues.service';
 import { CreateVenueDto } from './dto/create-venue.dto';
 
@@ -9,6 +9,16 @@ export class VenuesController {
   @Get()
   list() {
     return this.venues.listVenues();
+  }
+
+  @Get('by-host')
+  byHost(@Headers('host') host: string, @Query('host') qHost?: string) {
+    return this.venues.getVenueByHost(qHost || host || '');
+  }
+
+  @Get('by-subdomain/:subdomain')
+  bySubdomain(@Param('subdomain') subdomain: string) {
+    return this.venues.getVenueBySlug(subdomain);
   }
 
   @Get('default')

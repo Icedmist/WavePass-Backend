@@ -40,6 +40,19 @@ export class VenuesService {
     return venue;
   }
 
+  async getVenueByHost(host: string) {
+    const clean = host.split(':')[0].toLowerCase();
+    // host like my-venue.wavepass.com, my-venue.wavepass.techwithnexa.com, or localhost:3000
+    const parts = clean.split('.');
+    // skip bare domains and localhost
+    if (clean === 'localhost' || clean === '127.0.0.1' || parts.length < 3) {
+      return null;
+    }
+    const sub = parts[0];
+    if (!sub || sub === 'www' || sub === 'api' || sub === 'admin') return null;
+    return this.getVenueBySlug(sub).catch(() => null);
+  }
+
   async createVenue(dto: CreateVenueDto) {
     const existing = await this.prisma.venue.findUnique({ where: { slug: dto.slug } });
     if (existing) throw new ConflictException(`Venue slug ${dto.slug} already exists`);
@@ -67,6 +80,7 @@ export class VenuesService {
           slug: 'default',
           timezone: 'Africa/Lagos',
           currency: 'NGN',
+          logoUrl: 'https://wavepass-web.vercel.app/logo.png',
         },
         include: { routers: true, plans: { where: { active: true } } },
       });

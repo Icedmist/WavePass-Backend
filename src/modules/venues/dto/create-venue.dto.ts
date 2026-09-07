@@ -1,10 +1,12 @@
-import { IsOptional, IsString } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, Matches } from 'class-validator';
 
 export class CreateVenueDto {
   @IsString()
+  @IsNotEmpty()
   name: string;
 
   @IsString()
+  @Matches(/^[a-z0-9-]+$/, { message: 'slug must be lowercase a-z, 0-9, hyphen and will be used as subdomain (e.g. my-venue.wavepass.com)' })
   slug: string;
 
   @IsOptional()
@@ -15,7 +17,7 @@ export class CreateVenueDto {
   @IsString()
   currency?: string;
 
-  @IsOptional()
   @IsString()
-  logoUrl?: string;
+  @IsNotEmpty({ message: 'logoUrl is required — upload venue logo during onboarding' })
+  logoUrl: string;
 }
