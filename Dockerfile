@@ -3,7 +3,7 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-RUN npm install -g pnpm
+RUN apk add --no-cache openssl && npm install -g pnpm
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml* ./
 COPY prisma ./prisma/
@@ -20,6 +20,8 @@ RUN pnpm build
 FROM node:22-alpine AS runner
 
 WORKDIR /app
+
+RUN apk add --no-cache openssl
 
 ENV NODE_ENV=production
 ENV PORT=3000
