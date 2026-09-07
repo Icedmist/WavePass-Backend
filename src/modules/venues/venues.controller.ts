@@ -1,6 +1,7 @@
-import { Body, Controller, Get, Headers, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Param, Patch, Post, Query } from '@nestjs/common';
 import { VenuesService } from './venues.service';
 import { CreateVenueDto } from './dto/create-venue.dto';
+import { UpdateVenueDto } from './dto/update-venue.dto';
 
 @Controller('venues')
 export class VenuesController {
@@ -34,5 +35,10 @@ export class VenuesController {
   @Post()
   create(@Body() dto: CreateVenueDto) {
     return this.venues.createVenue(dto);
+  }
+
+  @Patch(':id')
+  update(@Param('id') id: string, @Body() dto: UpdateVenueDto) {
+    return this.venues.updateVenue(id, dto);
   }
 }

@@ -54,18 +54,32 @@ export class VenuesService {
   }
 
   async createVenue(dto: CreateVenueDto) {
-    const existing = await this.prisma.venue.findUnique({ where: { slug: dto.slug } });
-    if (existing) throw new ConflictException(`Venue slug ${dto.slug} already exists`);
+    const slug = dto.slug.toLowerCase().trim();
+    const existing = await this.prisma.venue.findUnique({ where: { slug } });
+    if (existing) throw new ConflictException(`Venue slug ${slug} already exists`);
 
     return this.prisma.venue.create({
       data: {
         name: dto.name,
-        slug: dto.slug,
+        slug,
         timezone: dto.timezone || 'Africa/Lagos',
         currency: dto.currency || 'NGN',
         logoUrl: dto.logoUrl,
       },
     });
+  }
+
+  async updateVenue(id: string, dto: any) {
+    const venue = await this.prisma.venue.findUnique({ where: { id } });
+    if (!venue) throw new NotFoundException(`Venue ${id} not found`);
+    if (dto.slug) {
+      const slug = dto.slug.toLowerCase().trim();
+      if (!/^[a-z0-9-]+$/.test(slug)) throw new ConflictException('Invalid slug format');
+      const exists = await this.prisma.venue.findUnique({ where: { slug } });
+      if (exists && exists.id !== id) throw new ConflictException(`Slug ${slug} already taken`);
+      dto.slug = slug;
+    }
+    return this.prisma.venue.update({ where: { id }, data: dto });
   }
 
   async getDefaultVenue() {
