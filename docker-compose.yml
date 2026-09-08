@@ -32,6 +32,7 @@ services:
       retries: 5
 
   api:
+    image: registry.digitalocean.com/wavepass/api:latest
     build:
       context: .
       dockerfile: Dockerfile
