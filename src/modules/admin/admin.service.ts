@@ -265,6 +265,11 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  async getUserProfile(email?: string) {
+    const targetEmail = (email || 'talk2icedmist@gmail.com').toLowerCase().trim();
+    return this.prisma.user.findUnique({ where: { email: targetEmail } });
+  }
+
   async updateUserProfile(email?: string, name?: string, newEmail?: string) {
     const targetEmail = (email || 'talk2icedmist@gmail.com').toLowerCase().trim();
     const user = await this.prisma.user.findUnique({ where: { email: targetEmail } });

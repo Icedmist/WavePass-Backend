@@ -33,6 +33,25 @@ export class AdminController {
     return { ok: true, message: 'Password updated successfully', token, expiresIn };
   }
 
+  @Get('profile')
+  async getProfile(@Query('email') email?: string) {
+    const targetEmail = (email || this.auth.getAdminEmail()).toLowerCase().trim();
+    const user = await this.admin.getUserProfile(targetEmail);
+    return { ok: true, email: targetEmail, user: user || { email: targetEmail, name: 'Venue Owner' } };
+  }
+
+  @Get('update-profile')
+  async getUpdateProfile(@Query('email') email?: string) {
+    const targetEmail = (email || this.auth.getAdminEmail()).toLowerCase().trim();
+    const user = await this.admin.getUserProfile(targetEmail);
+    return {
+      ok: true,
+      email: targetEmail,
+      user: user || { email: targetEmail, name: 'Venue Owner' },
+      message: 'Admin profile endpoint. Use POST with { email, name, newEmail } to update profile details.',
+    };
+  }
+
   @Post('update-profile')
   async updateProfile(@Body() body: { email?: string; name?: string; newEmail?: string }) {
     if (body.newEmail) {
