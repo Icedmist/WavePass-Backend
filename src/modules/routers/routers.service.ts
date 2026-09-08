@@ -68,15 +68,38 @@ export class RoutersService {
 
   async getHealth(id: string) {
     const router = await this.getRouterById(id);
-    const reachable = router.status === RouterStatus.ONLINE;
+    const user = process.env.MIKROTIK_API_USER || 'admin';
+    const pass = process.env.MIKROTIK_API_PASS || '';
+    const resource = await this.mikrotik.getSystemResource(router.endpoint, { username: user, password: pass });
+    const reachable = resource !== null || router.status === RouterStatus.ONLINE;
+
+    if (resource && router.status !== RouterStatus.ONLINE) {
+      await this.prisma.router.update({
+        where: { id },
+        data: { status: RouterStatus.ONLINE, lastSeen: new Date() },
+      }).catch(() => {});
+    }
+
     return {
       id: router.id,
       name: router.name,
       endpoint: router.endpoint,
-      status: router.status,
-      lastSeen: router.lastSeen,
+      status: reachable ? RouterStatus.ONLINE : RouterStatus.OFFLINE,
+      lastSeen: reachable ? new Date() : router.lastSeen,
       reachable,
+      resource: resource || null,
       timestamp: new Date(),
+    };
+  }
+
+  async rebootRouter(id: string) {
+    const router = await this.getRouterById(id);
+    const user = process.env.MIKROTIK_API_USER || 'admin';
+    const pass = process.env.MIKROTIK_API_PASS || '';
+    const success = await this.mikrotik.rebootRouter(router.endpoint, { username: user, password: pass });
+    return {
+      ok: success,
+      message: success ? `Reboot command sent to router ${router.name} (${router.endpoint})` : `Failed to dispatch reboot to router ${router.name}`,
     };
   }
 

@@ -31,6 +31,11 @@ export class RoutersController {
     return this.routers.getHealth(id);
   }
 
+  @Post(':id/reboot')
+  reboot(@Param('id') id: string) {
+    return this.routers.rebootRouter(id);
+  }
+
   @Get(':id/provision.rsc')
   getProvisionScript(@Param('id') id: string) {
     return this.routers.generateProvisionScript(id);

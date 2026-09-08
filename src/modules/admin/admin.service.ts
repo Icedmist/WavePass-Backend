@@ -1,12 +1,13 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma.service';
 import { PaystackService } from '../paystack/paystack.service';
 import { MikrotikProvisioningQueue } from '../mikrotik/mikrotik-provisioning.queue';
 import { VenuesService } from '../venues/venues.service';
 
 @Injectable()
-export class AdminService {
+export class AdminService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(AdminService.name);
+  private cleanupTimer?: NodeJS.Timeout;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -14,6 +15,19 @@ export class AdminService {
     private readonly venuesService: VenuesService,
     private readonly provisioningQueue: MikrotikProvisioningQueue,
   ) {}
+
+  onModuleInit() {
+    // Run automated session sweep every 60 seconds
+    this.cleanupTimer = setInterval(() => {
+      this.cleanup().catch((err) => {
+        this.logger.debug(`Automated session cleanup error: ${err.message}`);
+      });
+    }, 60000);
+  }
+
+  onModuleDestroy() {
+    if (this.cleanupTimer) clearInterval(this.cleanupTimer);
+  }
 
   async getStats() {
     const allPayments = await this.prisma.payment.findMany({

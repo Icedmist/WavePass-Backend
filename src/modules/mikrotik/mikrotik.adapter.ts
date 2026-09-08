@@ -108,6 +108,33 @@ export class MikrotikAdapter {
     }
   }
 
+  async rebootRouter(endpoint: string, credentials: { username: string; password: string }): Promise<boolean> {
+    try {
+      const res = await fetch(`${endpoint}/rest/system/reboot`, {
+        method: 'POST',
+        headers: { Authorization: this.basicAuth(credentials.username, credentials.password) },
+        signal: AbortSignal.timeout(5000),
+      });
+      return res.ok || res.status === 200 || res.status === 204;
+    } catch (err) {
+      this.logger.warn(`Router reboot request failed: ${(err as Error).message}`);
+      return false;
+    }
+  }
+
+  async getSystemResource(endpoint: string, credentials: { username: string; password: string }) {
+    try {
+      const res = await fetch(`${endpoint}/rest/system/resource`, {
+        headers: { Authorization: this.basicAuth(credentials.username, credentials.password) },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
   private basicAuth(user: string, pass: string): string {
     return `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
   }
