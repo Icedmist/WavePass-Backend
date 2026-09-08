@@ -77,3 +77,9 @@
 - [x] Exposed `CashoutsController` (`GET /api/v1/cashouts/balance/:venueId`, `POST /api/v1/cashouts/bank-accounts`, `GET /api/v1/cashouts/bank-accounts`, `POST /api/v1/cashouts`, `POST /api/v1/cashouts/confirm`, `POST /api/v1/cashouts/:id/reject`, `GET /api/v1/cashouts`).
 - [x] Admin password verified via constant-time HMAC compare against `ADMIN_PASSWORD_HASH` (or hashed `ADMIN_PASSWORD`).
 - [x] Verified clean `nest build` and passing vitest suite.
+
+### 11. Batch Vouchers Production & Dynamic Provisioning Scripts
+- [x] Implemented `POST /api/v1/vouchers/batches` supporting bulk generation of 1 to 500 vouchers for any venue and pricing plan.
+- [x] Stored SHA-256 hashed voucher codes with activation status in the database.
+- [x] Built dynamic RouterOS v7 provisioning script endpoint (`GET /api/v1/routers/:id/provision.rsc`) tailoring captive portal redirect and bridge configs to gateway IDs.
+- [x] Ensured mock DVA metadata flags (`metadata: { mock: true }`) so mobile and web clients detect when Paystack credentials are unconfigured.

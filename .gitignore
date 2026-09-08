@@ -5,3 +5,10 @@ dist
 *.log
 coverage
 .DS_Store
+*.tsbuildinfo
+test/*.js
+test/*.js.map
+test/*.d.ts
+prisma/seed.js
+prisma/seed.js.map
+prisma/seed.d.ts
