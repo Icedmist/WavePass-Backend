@@ -250,4 +250,39 @@ export class AdminService {
       return { verified: false, error: err.message, local };
     }
   }
+
+  async updateUserProfile(email?: string, name?: string, newEmail?: string) {
+    const targetEmail = (email || 'talk2icedmist@gmail.com').toLowerCase().trim();
+    const user = await this.prisma.user.findUnique({ where: { email: targetEmail } });
+    if (user) {
+      return this.prisma.user.update({
+        where: { id: user.id },
+        data: {
+          name: name !== undefined ? name : user.name,
+          email: newEmail ? newEmail.toLowerCase().trim() : user.email,
+        },
+      });
+    }
+    return this.prisma.user.create({
+      data: {
+        email: (newEmail || targetEmail).toLowerCase().trim(),
+        name: name || 'Venue Owner',
+        status: 'active',
+      },
+    });
+  }
+
+  async deleteUserAccount(email?: string) {
+    const targetEmail = (email || 'talk2icedmist@gmail.com').toLowerCase().trim();
+    const user = await this.prisma.user.findUnique({ where: { email: targetEmail } });
+    if (user) {
+      await this.prisma.venueMember.deleteMany({ where: { userId: user.id } });
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: { status: 'deleted' },
+      });
+      return { id: user.id, email: targetEmail, status: 'deleted' };
+    }
+    return { email: targetEmail, status: 'deleted' };
+  }
 }

@@ -10,17 +10,35 @@ export class AdminAuthService {
 
   constructor(private readonly jwt: JwtService) {}
 
-  private readonly adminEmail = (process.env.ADMIN_EMAIL || 'talk2icedmist@gmail.com').toLowerCase().trim();
+  private adminEmail = (process.env.ADMIN_EMAIL || 'talk2icedmist@gmail.com').toLowerCase().trim();
+  private runtimePasswordHash?: string;
 
   verifyPassword(password: string, email?: string): boolean {
     if (email && email.toLowerCase().trim() !== this.adminEmail) return false;
     const hash =
+      this.runtimePasswordHash ||
       process.env.ADMIN_PASSWORD_HASH ||
       createHash('sha256').update(process.env.ADMIN_PASSWORD || 'wavepass-change-me').digest('hex');
     const given = createHash('sha256').update(password || '').digest('hex');
     const a = Buffer.from(given, 'utf8');
     const b = Buffer.from(hash, 'utf8');
     return a.length === b.length && timingSafeEqual(a, b);
+  }
+
+  changePassword(currentPassword: string, newPassword: string, email?: string): boolean {
+    if (!this.verifyPassword(currentPassword, email)) return false;
+    this.runtimePasswordHash = createHash('sha256').update(newPassword).digest('hex');
+    return true;
+  }
+
+  updateAdminEmail(newEmail: string): void {
+    if (newEmail && newEmail.includes('@')) {
+      this.adminEmail = newEmail.toLowerCase().trim();
+    }
+  }
+
+  getAdminEmail(): string {
+    return this.adminEmail;
   }
 
   // keep old single-arg signature for cashout compat (no email check)
