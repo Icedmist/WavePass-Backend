@@ -53,6 +53,31 @@ export class VenuesService {
     return this.getVenueBySlug(sub).catch(() => null);
   }
 
+  async checkSlugAvailability(rawSlug: string, venueId?: string) {
+    const slug = (rawSlug || '').toLowerCase().trim();
+    if (!slug) {
+      return { available: false, slug, reason: 'Slug cannot be empty' };
+    }
+    if (!/^[a-z0-9-]+$/.test(slug)) {
+      return { available: false, slug, reason: 'Only lowercase letters, numbers, and hyphens (-) allowed' };
+    }
+    if (slug.length < 2) {
+      return { available: false, slug, reason: 'Subdomain must be at least 2 characters long' };
+    }
+    const reserved = ['api', 'admin', 'www', 'app', 'auth', 'portal', 'status', 'mail', 'support', 'billing'];
+    if (reserved.includes(slug)) {
+      return { available: false, slug, reason: 'This subdomain is reserved by the system' };
+    }
+    const existing = await this.prisma.venue.findUnique({ where: { slug } });
+    if (!existing) {
+      return { available: true, slug, isCurrent: false, message: 'Subdomain is available' };
+    }
+    if (venueId && existing.id === venueId) {
+      return { available: true, slug, isCurrent: true, message: 'Current venue subdomain' };
+    }
+    return { available: false, slug, isCurrent: false, reason: 'Subdomain is already taken by another venue' };
+  }
+
   async createVenue(dto: CreateVenueDto) {
     const slug = dto.slug.toLowerCase().trim();
     const existing = await this.prisma.venue.findUnique({ where: { slug } });

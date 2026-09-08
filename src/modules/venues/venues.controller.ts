@@ -22,6 +22,11 @@ export class VenuesController {
     return this.venues.getVenueBySlug(subdomain);
   }
 
+  @Get('check-slug/:slug')
+  checkSlug(@Param('slug') slug: string, @Query('venueId') venueId?: string) {
+    return this.venues.checkSlugAvailability(slug, venueId);
+  }
+
   @Get('default')
   getDefault() {
     return this.venues.getDefaultVenue();
