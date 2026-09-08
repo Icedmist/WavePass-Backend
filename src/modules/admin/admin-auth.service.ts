@@ -10,7 +10,10 @@ export class AdminAuthService {
 
   constructor(private readonly jwt: JwtService) {}
 
-  verifyPassword(password: string): boolean {
+  private readonly adminEmail = (process.env.ADMIN_EMAIL || 'talk2icedmist@gmail.com').toLowerCase().trim();
+
+  verifyPassword(password: string, email?: string): boolean {
+    if (email && email.toLowerCase().trim() !== this.adminEmail) return false;
     const hash =
       process.env.ADMIN_PASSWORD_HASH ||
       createHash('sha256').update(process.env.ADMIN_PASSWORD || 'wavepass-change-me').digest('hex');
@@ -20,8 +23,14 @@ export class AdminAuthService {
     return a.length === b.length && timingSafeEqual(a, b);
   }
 
-  signAdminToken(): { token: string; expiresIn: string } {
-    const payload = { role: 'admin', iss: 'wavepass-admin' };
+  // keep old single-arg signature for cashout compat (no email check)
+  verifyAdminPassword(password: string): boolean {
+    return this.verifyPassword(password);
+  }
+
+  signAdminToken(email?: string): { token: string; expiresIn: string } {
+    const payload: any = { role: 'admin', iss: 'wavepass-admin' };
+    if (email) payload.email = email.toLowerCase().trim();
     const token = this.jwt.sign(payload, { secret: this.jwtSecret, expiresIn: this.expiresIn as any });
     return { token, expiresIn: this.expiresIn };
   }

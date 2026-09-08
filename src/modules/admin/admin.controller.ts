@@ -13,11 +13,11 @@ export class AdminController {
   ) {}
 
   @Post('verify-password')
-  verifyPassword(@Body() body: { password: string }) {
-    const ok = this.auth.verifyPassword(body.password || '');
+  verifyPassword(@Body() body: { email?: string; password: string }) {
+    const ok = this.auth.verifyPassword(body.password || '', body.email);
     if (!ok) return { ok: false, role: null };
-    const { token, expiresIn } = this.auth.signAdminToken();
-    return { ok: true, role: 'admin', token, expiresIn };
+    const { token, expiresIn } = this.auth.signAdminToken(body.email);
+    return { ok: true, role: 'admin', token, expiresIn, email: body.email || undefined };
   }
 
   @UseGuards(AdminAuthGuard)
