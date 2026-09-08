@@ -7,6 +7,7 @@ async function bootstrap() {
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
     new FastifyAdapter({ trustProxy: true }),
+    { bodyParser: false },
   );
 
   // Paystack signature verification needs the exact raw request body.
