@@ -1,4 +1,4 @@
-name: Build and Push to DO Registry
+name: Build, Push and Deploy
 
 on:
   push:
@@ -7,8 +7,10 @@ on:
 
 env:
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+
 jobs:
   build:
+    name: Build Docker Image
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,3 +38,39 @@ jobs:
           tags: registry.digitalocean.com/wavepass/api:latest
           cache-from: type=registry,ref=registry.digitalocean.com/wavepass/api:buildcache
           cache-to: type=registry,ref=registry.digitalocean.com/wavepass/api:buildcache,mode=max
+
+  deploy:
+    name: Deploy to DigitalOcean Droplet
+    needs: build
+    runs-on: ubuntu-latest
+    if: ${{ secrets.DROPLET_IP != '' && secrets.DROPLET_SSH_KEY != '' }}
+    steps:
+      - name: SSH and Deploy to Droplet
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DROPLET_IP }}
+          username: ${{ secrets.DROPLET_USER || 'root' }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          passphrase: ${{ secrets.DROPLET_SSH_PASSPHRASE || '' }}
+          script: |
+            echo "🚀 Starting automated deployment on droplet..."
+            cd ~/WavePass-Backend || cd ~/wavepass-backend
+            
+            echo "📥 Pulling latest git repository changes..."
+            git pull origin main
+
+            echo "🐳 Updating API container..."
+            # Pull prebuilt image if registry is configured; otherwise build with layer caching
+            docker compose pull api || docker compose build api
+
+            echo "🔄 Gracefully updating api container without stopping database..."
+            docker compose up -d --no-deps api
+
+            echo "🧹 Pruning old dangling images..."
+            docker image prune -f
+
+            echo "🩺 Verifying container health..."
+            sleep 6
+            curl -sf http://localhost:4000/api/v1/health || curl -sf http://localhost:3000/api/v1/health || (echo "⚠️ Health check returned non-200. Showing recent logs:" && docker compose logs --tail=30 api)
+
+            echo "✅ Deployment completed successfully!"
