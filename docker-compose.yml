@@ -40,14 +40,10 @@ services:
     restart: unless-stopped
     ports:
       - "4000:3000"
+    env_file:
+      - .env
     environment:
       - PORT=3000
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-wavepass}?schema=public
-      - REDIS_URL=redis://redis:6379
-      - PAYSTACK_SECRET_KEY=${PAYSTACK_SECRET_KEY:-sk_test_mock}
-      - PAYSTACK_PUBLIC_KEY=${PAYSTACK_PUBLIC_KEY:-pk_test_mock}
-      - MOCK_ROUTER_URL=${MOCK_ROUTER_URL:-http://host.docker.internal:3001}
-      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:8000}
     depends_on:
       postgres:
         condition: service_healthy
