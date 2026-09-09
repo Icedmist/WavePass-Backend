@@ -26,8 +26,8 @@ export class PortalController {
   }
 
   @Get('landing')
-  landing(@Query('mac') mac: string, @Query('ip') ip?: string) {
-    if (!mac) return { hasPaid: false, walledGardenOpen: true, message: 'mac required — walled garden open for portal' };
+  landing(@Query('mac') mac?: string, @Query('ip') ip?: string) {
+    if (!mac && !ip) return { hasPaid: false, walledGardenOpen: true, message: 'Open via hotspot login (http://example.com) so we can detect your device, or enter voucher code.' };
     return this.portal.getLandingStatus(mac, ip);
   }
 

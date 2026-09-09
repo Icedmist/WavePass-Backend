@@ -183,13 +183,24 @@ export class PortalService {
     return `${base}/portal?${qs.toString()}`;
   }
 
-  async getLandingStatus(mac: string, ip?: string) {
-    const normalized = mac.toUpperCase().trim();
-    const session = await this.prisma.session.findFirst({
-      where: { mac: normalized, status: 'ACTIVE' },
-      include: { router: { select: { id: true, name: true, endpoint: true } }, voucher: { include: { plan: true } } },
-      orderBy: { startedAt: 'desc' },
-    });
+  async getLandingStatus(mac?: string, ip?: string) {
+    const normalized = (mac || '').toUpperCase().trim();
+    let session: any = null;
+    if (normalized) {
+      session = await this.prisma.session.findFirst({
+        where: { mac: normalized, status: 'ACTIVE' },
+        include: { router: { select: { id: true, name: true, endpoint: true } }, voucher: { include: { plan: true } } },
+        orderBy: { startedAt: 'desc' },
+      });
+    }
+    // Fallback: manual visit has no ?mac= (browser never exposes MAC) — match by last-seen IP
+    if (!session && ip) {
+      session = await this.prisma.session.findFirst({
+        where: { ip, status: 'ACTIVE' },
+        include: { router: { select: { id: true, name: true, endpoint: true } }, voucher: { include: { plan: true } } },
+        orderBy: { startedAt: 'desc' },
+      });
+    }
 
     // Try to enrich with live router data (bytes, IP) if session exists
     let live: any = null;
@@ -220,7 +231,7 @@ export class PortalService {
       return {
         hasPaid: false,
         walledGardenOpen: true,
-        mac: normalized,
+        mac: normalized || session?.mac || null,
         ip: deviceIp,
         remainingMs: 0,
         dataUsedBytes: 0,
@@ -229,7 +240,9 @@ export class PortalService {
         paymentMethods: ['card', 'transfer', 'voucher'],
         voucherAccess: true,
         plans,
-        message: 'Not connected — choose a plan or enter voucher to open access.',
+        message: normalized || deviceIp
+          ? 'Not connected — choose a plan or enter voucher to open access.'
+          : 'Open this page via hotspot login (http://example.com) so we can detect your device, or enter your voucher code.',
       };
     }
 
