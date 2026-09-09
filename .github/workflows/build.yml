@@ -58,20 +58,20 @@ jobs:
             cd ~/WavePass-Backend || cd ~/wavepass-backend
             
             echo "📥 Pulling latest git repository changes..."
-            git pull origin main
+            git pull --ff-only origin main || echo "⚠️ git pull failed (private repo without credential helper?) — continuing with registry image"
 
             echo "🐳 Updating API container..."
             # Pull prebuilt image if registry is configured; otherwise build with layer caching
-            docker compose pull api || docker compose build api
+            timeout 300 docker compose pull api || docker compose build api
 
             echo "🔄 Gracefully updating api container without stopping database..."
-            docker compose up -d --no-deps api
+            timeout 180 docker compose up -d --no-deps api
 
             echo "🧹 Pruning old dangling images..."
-            docker image prune -f
+            timeout 120 docker image prune -f --filter "until=24h" || true
 
             echo "🩺 Verifying container health..."
             sleep 6
-            curl -sf http://localhost:4000/api/v1/health || curl -sf http://localhost:3000/api/v1/health || (echo "⚠️ Health check returned non-200. Showing recent logs:" && docker compose logs --tail=30 api)
+            timeout 30 curl -sf http://localhost:4000/api/v1/health || timeout 30 curl -sf http://localhost:3000/api/v1/health || (echo "⚠️ Health check returned non-200. Showing recent logs:" && timeout 30 docker compose logs --tail=30 api)
 
             echo "✅ Deployment completed successfully!"
