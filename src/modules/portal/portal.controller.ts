@@ -32,16 +32,17 @@ export class PortalController {
   }
 
   // Captive portal intercept — MikroTik redirects any unauth HTTP here;
-  // we bounce the device straight to the WavePass web landing with mac/ip/link-orig
+  // we bounce the device straight to the venue store subdomain with mac/ip/link-orig
+  // Pass ?venue=<slug> or ?routerId=<id> so unpaid devices land on slug.nexawavepass.com, not the generic homepage
   @Get('captive')
-  async captive(@Query('mac') mac: string, @Query('ip') ip: string, @Query('link-orig') linkOrig: string, @Query('username') username: string, @Res() res: FastifyReply) {
-    const target = await this.portal.getCaptiveRedirect(mac, ip, linkOrig, username);
+  async captive(@Query('mac') mac: string, @Query('ip') ip: string, @Query('link-orig') linkOrig: string, @Query('username') username: string, @Query('venue') venue: string, @Query('routerId') routerId: string, @Res() res: FastifyReply) {
+    const target = await this.portal.getCaptiveRedirect(mac, ip, linkOrig, username, venue, routerId);
     return res.status(302).header('Location', target).send();
   }
 
   @Get('login')
-  async loginRedirect(@Query('mac') mac: string, @Query('ip') ip: string, @Query('link-orig') linkOrig: string, @Query('username') username: string, @Res() res: FastifyReply) {
-    const target = await this.portal.getCaptiveRedirect(mac, ip, linkOrig, username);
+  async loginRedirect(@Query('mac') mac: string, @Query('ip') ip: string, @Query('link-orig') linkOrig: string, @Query('username') username: string, @Query('venue') venue: string, @Query('routerId') routerId: string, @Res() res: FastifyReply) {
+    const target = await this.portal.getCaptiveRedirect(mac, ip, linkOrig, username, venue, routerId);
     return res.status(302).header('Location', target).send();
   }
 

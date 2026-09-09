@@ -141,7 +141,30 @@ export class PortalService {
     };
   }
 
-  async getCaptiveRedirect(mac: string, ip?: string, linkOrig?: string, username?: string): Promise<string> {
+  private async resolveVenueBase(venueSlugOrId?: string, routerId?: string): Promise<string> {
+    // Returns e.g. https://flagship.nexawavepass.com or falls back to FRONTEND_URL
+    try {
+      if (venueSlugOrId) {
+        let venue: any = null;
+        try {
+          venue = await this.venuesService.getVenueBySlug(venueSlugOrId.toLowerCase().trim());
+        } catch {
+          try {
+            venue = await this.venuesService.getVenueById(venueSlugOrId);
+          } catch {}
+        }
+        if (venue?.slug) return `https://${venue.slug}.nexawavepass.com`;
+      }
+      if (routerId) {
+        const router = await this.prisma.router.findUnique({ where: { id: routerId }, include: { venue: true } });
+        if (router?.venue?.slug) return `https://${router.venue.slug}.nexawavepass.com`;
+      }
+    } catch {}
+    return this.frontendUrl;
+  }
+
+  async getCaptiveRedirect(mac: string, ip?: string, linkOrig?: string, username?: string, venueSlugOrId?: string, routerId?: string): Promise<string> {
+    const base = await this.resolveVenueBase(venueSlugOrId, routerId);
     const qs = new URLSearchParams();
     if (mac) qs.set('mac', mac.toUpperCase());
     if (ip) qs.set('ip', ip);
@@ -153,11 +176,11 @@ export class PortalService {
         const s = await this.getLandingStatus(mac, ip);
         if (s.hasPaid) {
           qs.set('paid', '1');
-          return `${this.frontendUrl}/success?${qs.toString()}`;
+          return `${base}/success?${qs.toString()}`;
         }
       } catch {}
     }
-    return `${this.frontendUrl}/portal?${qs.toString()}`;
+    return `${base}/portal?${qs.toString()}`;
   }
 
   async getLandingStatus(mac: string, ip?: string) {
