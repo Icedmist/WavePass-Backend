@@ -5,15 +5,10 @@
 
 :log info "WavePass: Starting automated Hotspot configuration..."
 
-# 1. Create dedicated least-privilege WavePass API user
-# NOTE: We intentionally do NOT touch the 'admin' user — keep admin blank (stock) so both MikroTik app and WavePass probe (admin:"") keep working.
-# Set a strong password for 'wavepass' only; admin stays as-is for local recovery.
-:if ([:len [/system/user find name="wavepass"]] = 0) do={
-    /system/user add name="wavepass" group="write" password="CHANGE_THIS_WAVEPASS_PASSWORD" comment="WavePass API service account"
-    :log info "WavePass: Created 'wavepass' system user (admin untouched)."
-} else={
-    :log info "WavePass: 'wavepass' user already exists (admin untouched)."
-}
+# 1. Router Credentials
+# WavePass uses the router's existing 'admin' user with its default/configured password.
+# No extra 'wavepass' user is created, ensuring full compatibility with WinBox, MikroTik app, and WavePass.
+:log info "WavePass: Using default/configured router admin credentials."
 
 # 2. Enable REST API / HTTP service for WavePass control
 /ip/service/enable [find name="www"]
@@ -34,5 +29,13 @@
 /ip/hotspot/user/profile add name="profile_1h" session-timeout=1h keepalive-timeout=2m shared-users=1 status-autorefresh=1m rate-limit="10M/5M" comment="WavePass 1-Hour Profile"
 /ip/hotspot/user/profile add name="profile_12h" session-timeout=12h keepalive-timeout=2m shared-users=1 status-autorefresh=1m rate-limit="15M/5M" comment="WavePass 12-Hour Profile"
 /ip/hotspot/user/profile add name="profile_1d" session-timeout=1d keepalive-timeout=2m shared-users=1 status-autorefresh=1m rate-limit="20M/10M" comment="WavePass 24-Hour Profile"
+
+# 5. Low-RAM Memory Auto-Cleanup Script & Scheduler (Mikhmon Parity)
+:if ([:len [/system/script find name="wavepass-cleanup"]] = 0) do={
+  /system script add name="wavepass-cleanup" source={/ip hotspot user remove [find comment="expired"]} comment="WavePass expired user purge"
+}
+:if ([:len [/system/scheduler find name="wavepass-cleanup"]] = 0) do={
+  /system scheduler add name="wavepass-cleanup" interval=2h on-event="wavepass-cleanup" comment="WavePass 2-hour user cleanup"
+}
 
 :log info "WavePass: Auto-configuration complete! Router is ready for WavePass cloud control."

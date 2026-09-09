@@ -43,7 +43,7 @@ export class MikrotikProvisioningProcessor extends WorkerHost {
 
     await this.mikrotik.createHotspotUser(
       router.endpoint,
-      { username: process.env.MIKROTIK_API_USER as string, password: process.env.MIKROTIK_API_PASS as string },
+      this.getRouterCredentials(),
       {
         username,
         password,
@@ -69,6 +69,13 @@ export class MikrotikProvisioningProcessor extends WorkerHost {
     ]);
   }
 
+  private getRouterCredentials() {
+    return {
+      username: process.env.MIKROTIK_API_USER || 'admin',
+      password: process.env.MIKROTIK_API_PASS || '',
+    };
+  }
+
   private formatDuration(seconds: number): string {
     if (seconds >= 86400) return `${Math.floor(seconds / 86400)}d`;
     if (seconds >= 3600) return `${Math.floor(seconds / 3600)}h`;
@@ -90,7 +97,7 @@ export class MikrotikProvisioningProcessor extends WorkerHost {
 
     await this.mikrotik.createHotspotUser(
       router.endpoint,
-      { username: process.env.MIKROTIK_API_USER as string, password: process.env.MIKROTIK_API_PASS as string },
+      this.getRouterCredentials(),
       {
         username,
         password,
