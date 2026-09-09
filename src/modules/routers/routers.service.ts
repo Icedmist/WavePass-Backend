@@ -129,21 +129,40 @@ export class RoutersService {
     return `# WavePass Cloud Provisioning Script (RouterOS v7)
 # Generated dynamically for Gateway ID: ${routerId}
 
+# 1. HotSpot Server Profile
 /ip hotspot profile add name="wavepass-profile" \\
   hotspot-address=10.5.50.1 \\
-  login-by=http-chap,http-pap,mac \\
+  dns-name="login.nexawavepass.com" \\
+  login-by=http-chap,http-pap,mac-cookie \\
   login-page="${frontendUrl}/portal"
 
+# 2. HotSpot Server Instance
 /ip hotspot add name="wavepass-hotspot" \\
   interface=bridge1 \\
   profile=wavepass-profile \\
   disabled=no
 
-/ip hotspot walled-garden add dst-host="*.paystack.co" action=allow
-/ip hotspot walled-garden add dst-host="*.paystack.com" action=allow
-/ip hotspot walled-garden add dst-host="*.supabase.co" action=allow
-/ip hotspot walled-garden add dst-host="nexawavepass.com" action=allow
-/ip hotspot walled-garden add dst-host="*.nexawavepass.com" action=allow
+# 3. Walled Garden Rules (Bypass for authentication & checkout)
+/ip hotspot walled-garden add dst-host="*.paystack.co" action=allow comment="Paystack API"
+/ip hotspot walled-garden add dst-host="*.paystack.com" action=allow comment="Paystack Checkout"
+/ip hotspot walled-garden add dst-host="checkout.paystack.com" action=allow comment="Paystack Hosted"
+/ip hotspot walled-garden add dst-host="*.supabase.co" action=allow comment="Supabase Cloud"
+/ip hotspot walled-garden add dst-host="nexawavepass.com" action=allow comment="WavePass Domain"
+/ip hotspot walled-garden add dst-host="*.nexawavepass.com" action=allow comment="WavePass Venues"
+/ip hotspot walled-garden add dst-host="api.nexawavepass.com" action=allow comment="WavePass API"
+
+# 4. Standard Plan User Profiles with Rate Limiting (Mikhmon Parity)
+/ip hotspot user profile add name="profile_1h" session-timeout=1h keepalive-timeout=2m shared-users=1 status-autorefresh=1m rate-limit="10M/5M" comment="WavePass 1-Hour Tier"
+/ip hotspot user profile add name="profile_12h" session-timeout=12h keepalive-timeout=2m shared-users=1 status-autorefresh=1m rate-limit="15M/5M" comment="WavePass 12-Hour Tier"
+/ip hotspot user profile add name="profile_1d" session-timeout=1d keepalive-timeout=2m shared-users=1 status-autorefresh=1m rate-limit="20M/10M" comment="WavePass 24-Hour Tier"
+
+# 5. Low-RAM Memory Auto-Cleanup Script & Scheduler (Mikhmon Parity)
+:if ([:len [/system/script find name="wavepass-cleanup"]] = 0) do={
+  /system script add name="wavepass-cleanup" source={/ip hotspot user remove [find comment="expired"]} comment="WavePass expired user purge"
+}
+:if ([:len [/system/scheduler find name="wavepass-cleanup"]] = 0) do={
+  /system scheduler add name="wavepass-cleanup" interval=2h on-event="wavepass-cleanup" comment="WavePass 2-hour user cleanup"
+}
 `;
   }
 }
