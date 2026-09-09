@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Header, Param, Post, Query } from '@nestjs/common';
 import { RoutersService } from './routers.service';
 import { CreateRouterDto } from './dto/create-router.dto';
 
@@ -39,5 +39,11 @@ export class RoutersController {
   @Get(':id/provision.rsc')
   getProvisionScript(@Param('id') id: string) {
     return this.routers.generateProvisionScript(id);
+  }
+
+  @Get(':id/hotspot-login.html')
+  @Header('Content-Type', 'text/html')
+  hotspotLogin(@Param('id') id: string) {
+    return this.routers.generateHotspotLoginHtml(id);
   }
 }

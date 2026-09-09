@@ -103,6 +103,27 @@ export class RoutersService {
     };
   }
 
+  async generateHotspotLoginHtml(routerId: string): Promise<string> {
+    const router = await this.getRouterById(routerId);
+    const slug = (router as any)?.venue?.slug || 'flagship';
+    const base = `https://${slug}.nexawavepass.com/portal`;
+    return `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=${base}"><title>WavePass Wi-Fi</title></head>
+<body>
+<script>
+(function () {
+  var base = "${base}";
+  var q = "?mac=$(mac)&ip=$(ip)&link-orig=$(link-orig-esc)&venue=${slug}&routerId=${router.id}";
+  try { location.replace(base + q); } catch (e) { location.href = base + q; }
+})();
+</script>
+<noscript><a href="${base}">Continue to WavePass Wi-Fi login</a></noscript>
+<p>Connecting you to WavePass Wi-Fi… <a href="${base}">tap here if not redirected</a></p>
+</body>
+</html>`;
+  }
+
   generateProvisionScript(routerId: string) {
     const frontendUrl = process.env.FRONTEND_URL || 'https://nexawavepass.com';
     return `# WavePass Cloud Provisioning Script (RouterOS v7)
