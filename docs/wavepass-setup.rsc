@@ -6,11 +6,13 @@
 :log info "WavePass: Starting automated Hotspot configuration..."
 
 # 1. Create dedicated least-privilege WavePass API user
+# NOTE: We intentionally do NOT touch the 'admin' user — keep admin blank (stock) so both MikroTik app and WavePass probe (admin:"") keep working.
+# Set a strong password for 'wavepass' only; admin stays as-is for local recovery.
 :if ([:len [/system/user find name="wavepass"]] = 0) do={
     /system/user add name="wavepass" group="write" password="CHANGE_THIS_WAVEPASS_PASSWORD" comment="WavePass API service account"
-    :log info "WavePass: Created 'wavepass' system user."
+    :log info "WavePass: Created 'wavepass' system user (admin untouched)."
 } else={
-    :log info "WavePass: 'wavepass' user already exists."
+    :log info "WavePass: 'wavepass' user already exists (admin untouched)."
 }
 
 # 2. Enable REST API / HTTP service for WavePass control
