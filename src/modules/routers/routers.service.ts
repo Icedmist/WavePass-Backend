@@ -71,12 +71,13 @@ export class RoutersService {
     const user = process.env.MIKROTIK_API_USER || 'admin';
     const pass = process.env.MIKROTIK_API_PASS || '';
     const resource = await this.mikrotik.getSystemResource(router.endpoint, { username: user, password: pass });
-    const reachable = resource !== null || router.status === RouterStatus.ONLINE;
+    const reachable = resource !== null;
+    const newStatus = reachable ? RouterStatus.ONLINE : RouterStatus.OFFLINE;
 
-    if (resource && router.status !== RouterStatus.ONLINE) {
+    if (router.status !== newStatus) {
       await this.prisma.router.update({
         where: { id },
-        data: { status: RouterStatus.ONLINE, lastSeen: new Date() },
+        data: { status: newStatus, lastSeen: reachable ? new Date() : router.lastSeen },
       }).catch(() => {});
     }
 
@@ -84,7 +85,7 @@ export class RoutersService {
       id: router.id,
       name: router.name,
       endpoint: router.endpoint,
-      status: reachable ? RouterStatus.ONLINE : RouterStatus.OFFLINE,
+      status: newStatus,
       lastSeen: reachable ? new Date() : router.lastSeen,
       reachable,
       resource: resource || null,
