@@ -92,8 +92,8 @@ export class MikrotikProvisioningProcessor extends WorkerHost {
     const router = voucher.venue.routers[0];
     if (!router) throw new Error('No router available');
 
-    const username = `wp_${randomBytes(4).toString('hex')}`;
-    const password = randomBytes(6).toString('hex');
+    const username = voucher.displayCodeEnc || `wp_${voucher.id.slice(0, 8)}`;
+    const password = voucher.displayCodeEnc || username;
 
     await this.mikrotik.createHotspotUser(
       router.endpoint,

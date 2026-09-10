@@ -94,6 +94,7 @@ describe('MikrotikProvisioningProcessor', () => {
 
     prisma.voucher.findUniqueOrThrow.mockResolvedValue({
       id: 'v1',
+      displayCodeEnc: 'WP-TEST-1234',
       venueId: 'venue-1',
       plan: { durationSeconds: 86400, dataLimitBytes: BigInt(10 * 1024 * 1024 * 1024), simultaneousDevices: 1 },
       venue: { id: 'venue-1', routers: [{ id: 'r1', endpoint: 'http://10.0.0.1', venueId: 'venue-1' }] },
@@ -101,6 +102,10 @@ describe('MikrotikProvisioningProcessor', () => {
 
     await (proc as any).provisionForVoucher('v1');
     expect(adapter.createHotspotUser).toHaveBeenCalledTimes(1);
+    const call = adapter.createHotspotUser.mock.calls[0];
+    expect(call[0]).toBe('http://10.0.0.1');
+    expect(call[2].username).toBe('WP-TEST-1234');
+    expect(call[2].password).toBe('WP-TEST-1234');
     expect(prisma.$transaction).toHaveBeenCalled();
   });
 });

@@ -23,10 +23,27 @@ export class MikrotikAdapter {
   async testConnection(endpoint: string, username: string, password: string): Promise<boolean> {
     try {
       const res = await fetch(`${endpoint}/rest/system/resource`, {
-        headers: { Authorization: this.basicAuth(username, password) },
+        headers: {
+          Authorization: this.basicAuth(username, password),
+          Accept: 'application/json',
+        },
         signal: AbortSignal.timeout(5000),
       });
-      return res.ok;
+      if (!res.ok) return false;
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        this.logger.warn(`Router ${endpoint} returned non-JSON content-type: ${contentType}`);
+        return false;
+      }
+      const data = await res.json().catch(() => null);
+      if (!data || typeof data !== 'object') return false;
+      return (
+        'platform' in data ||
+        'board-name' in data ||
+        'version' in data ||
+        'uptime' in data ||
+        'cpu-load' in data
+      );
     } catch (err) {
       this.logger.warn(`Router connection test failed: ${(err as Error).message}`);
       return false;
@@ -125,11 +142,24 @@ export class MikrotikAdapter {
   async getSystemResource(endpoint: string, credentials: { username: string; password: string }) {
     try {
       const res = await fetch(`${endpoint}/rest/system/resource`, {
-        headers: { Authorization: this.basicAuth(credentials.username, credentials.password) },
+        headers: {
+          Authorization: this.basicAuth(credentials.username, credentials.password),
+          Accept: 'application/json',
+        },
         signal: AbortSignal.timeout(5000),
       });
       if (!res.ok) return null;
-      return await res.json();
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) return null;
+      const data = await res.json().catch(() => null);
+      if (!data || typeof data !== 'object') return null;
+      const isRouterOs =
+        'platform' in data ||
+        'board-name' in data ||
+        'version' in data ||
+        'uptime' in data ||
+        'cpu-load' in data;
+      return isRouterOs ? data : null;
     } catch {
       return null;
     }
