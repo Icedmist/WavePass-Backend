@@ -83,3 +83,14 @@
 - [x] Stored SHA-256 hashed voucher codes with activation status in the database.
 - [x] Built dynamic RouterOS v7 provisioning script endpoint (`GET /api/v1/routers/:id/provision.rsc`) tailoring captive portal redirect and bridge configs to gateway IDs.
 - [x] Ensured mock DVA metadata flags (`metadata: { mock: true }`) so mobile and web clients detect when Paystack credentials are unconfigured.
+
+### 12. Dual Connection & Default Admin Credentials Standard (Issue #7, PR #8)
+- [x] Standardized on default MikroTik `admin` credentials (blank password) without injecting unnecessary extra users.
+- [x] Added dual connection support (`local` and `tunnel`) in router models and provisioning workflows.
+
+### 13. Strict Hardware Validation & Voucher Hotspot Sync (Issue #9, PR #10)
+- [x] **Strict RouterOS JSON Validation**: Updated `MikrotikAdapter.testConnection()` and `getSystemResource()` to enforce `content-type: application/json` and parse RouterOS system resource fields (`platform`, `board-name`, `version`, `uptime`, `cpu-load`). Rejects HTTP 200 HTML redirects from web domains (like Vercel wildcards).
+- [x] **Real-time Status Tracking**: Removed stale `|| router.status === RouterStatus.ONLINE` in `routers.service.ts` so that router status truthfully reflects live hardware reachability.
+- [x] **Voucher Hotspot Credentials Match**: Updated `MikrotikProvisioningProcessor.provisionForVoucher()` to use the customer's actual voucher code (`displayCodeEnc`) as both username and password, allowing direct voucher code authentication on MikroTik Hotspots.
+- [x] **Verification**: Added `test/mikrotik-adapter.spec.ts`; all 17 tests passed; `nest build` succeeded.
+
