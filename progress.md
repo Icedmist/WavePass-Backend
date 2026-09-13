@@ -94,3 +94,14 @@
 - [x] **Voucher Hotspot Credentials Match**: Updated `MikrotikProvisioningProcessor.provisionForVoucher()` to use the customer's actual voucher code (`displayCodeEnc`) as both username and password, allowing direct voucher code authentication on MikroTik Hotspots.
 - [x] **Verification**: Added `test/mikrotik-adapter.spec.ts`; all 17 tests passed; `nest build` succeeded.
 
+### 14. Local Redis Security, Memory Caps & Droplet Runbook (Issue #11, PR #12)
+- [x] **Local Self-Hosted Redis**: Standardized on local Redis container (`redis:7-alpine`) over internal Docker network (`redis://redis:6379`), eliminating Upstash serverless request limits (`500k limit exceeded`) and network latency.
+- [x] **Security & Resource Hardening**:
+  - Bound Redis port strictly to `127.0.0.1:6379:6379` in `docker-compose.yml` to prevent public internet access.
+  - Added `--maxmemory 128mb --maxmemory-policy noeviction --appendonly yes` to safeguard 1GB RAM droplets.
+- [x] **Droplet Deployment Runbook (`docs/DIGITAL_OCEAN.md`)**:
+  - Documented mandatory 2 GB Swap file setup to prevent Out-Of-Memory freezes.
+  - Documented health checks (`/api/v1/health` and `/api/v1/health/ready`).
+- [x] **Verification**: Verified on production droplet; API healthy and connected to local Redis; 0 Redis request errors; memory usage 51.8MB (API) and 3.5MB (Redis).
+
+
