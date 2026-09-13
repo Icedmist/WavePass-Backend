@@ -40,14 +40,30 @@ App URL: `https://wavepass-api-xxxxx.ondigitalocean.app` — add custom domain `
 ## Droplet (VM, $6/mo, gives root for WireGuard tunnel mode)
 
 ```bash
-# Create Droplet (1 vCPU/1GB) + Docker
+# 1) Create Droplet (1 vCPU/1GB) + Docker
 doctl compute droplet create wavepass --image docker-20-04 --size s-1vcpu-1gb --region ams --ssh-keys <your-key-id>
 ssh root@<droplet-ip>
+
+# 2) Mandatory: Configure 2 GB Swap (Prevents Out-Of-Memory freezes on 1GB RAM)
+sudo fallocate -l 2G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+
+# 3) Clone repository and configure environment
 git clone https://github.com/Icedmist/WavePass-Backend.git && cd WavePass-Backend
-cp .env.example .env && nano .env  # fill DATABASE_URL, REDIS_URL, etc.
-docker compose up -d --build
-# Caddy/Nginx front: 80→3000, 443→3000
-curl http://localhost:3000/api/v1/venues/default
+cp .env.example .env && nano .env
+
+# In .env, set local Redis URL:
+# REDIS_URL=redis://redis:6379
+
+# 4) Launch stack with local Redis (capped at 128MB RAM)
+docker compose up -d
+
+# 5) Verify Health
+curl http://localhost:4000/api/v1/health
+curl http://localhost:4000/api/v1/health/ready
 ```
 
 Droplet is the **only** DO option that can host `wg0` for `connectionMode: tunnel` (needs `NET_ADMIN`). App Platform cannot.

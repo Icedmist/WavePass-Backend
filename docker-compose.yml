@@ -21,8 +21,9 @@ services:
     image: redis:7-alpine
     container_name: wavepass-redis
     restart: unless-stopped
+    command: redis-server --maxmemory 128mb --maxmemory-policy noeviction --appendonly yes
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - wavepass-redisdata:/data
     healthcheck:
