@@ -39,7 +39,7 @@ export class MikrotikProvisioningProcessor extends WorkerHost {
     const isMac = order.customerRef && /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/.test(order.customerRef);
     const username = isMac ? order.customerRef!.toUpperCase() : `wp_${randomBytes(4).toString('hex')}`;
     const password = isMac ? username : randomBytes(6).toString('hex');
-    const profile = order.plan.rateLimit || `profile_${this.formatDuration(order.plan.durationSeconds)}`;
+    const profile = order.plan.rateLimit || this.profileForDuration(order.plan.durationSeconds);
 
     await this.mikrotik.createHotspotUser(
       router.endpoint,
@@ -76,6 +76,18 @@ export class MikrotikProvisioningProcessor extends WorkerHost {
     };
   }
 
+  private profileForDuration(seconds: number): string {
+    if (seconds <= 1800) return 'profile_30m';
+    if (seconds <= 3600) return 'profile_1h';
+    if (seconds <= 7200) return 'profile_2h';
+    if (seconds <= 10800) return 'profile_3h';
+    if (seconds <= 21600) return 'profile_6h';
+    if (seconds <= 43200) return 'profile_12h';
+    if (seconds <= 86400) return 'profile_1d';
+    if (seconds <= 604800) return 'profile_7d';
+    return 'profile_30d';
+  }
+
   private formatDuration(seconds: number): string {
     if (seconds >= 86400) return `${Math.floor(seconds / 86400)}d`;
     if (seconds >= 3600) return `${Math.floor(seconds / 3600)}h`;
@@ -94,6 +106,7 @@ export class MikrotikProvisioningProcessor extends WorkerHost {
 
     const username = voucher.displayCodeEnc || `wp_${voucher.id.slice(0, 8)}`;
     const password = voucher.displayCodeEnc || username;
+    const profile = voucher.plan.rateLimit || this.profileForDuration(voucher.plan.durationSeconds);
 
     await this.mikrotik.createHotspotUser(
       router.endpoint,
@@ -101,6 +114,7 @@ export class MikrotikProvisioningProcessor extends WorkerHost {
       {
         username,
         password,
+        profile,
         sessionTimeoutSeconds: voucher.plan.durationSeconds,
         limitBytesTotal: voucher.plan.dataLimitBytes ? Number(voucher.plan.dataLimitBytes) : undefined,
         sharedUsers: voucher.plan.simultaneousDevices,
