@@ -54,6 +54,21 @@ export class RoutersService {
     const user = process.env.MIKROTIK_API_USER || 'admin';
     const pass = process.env.MIKROTIK_API_PASS || '';
 
+    const isPrivateLan =
+      !router.endpoint.includes('tunnel') &&
+      (router.connectionMode === 'local' ||
+        router.endpoint.includes('192.168.') ||
+        router.endpoint.includes('10.') ||
+        router.endpoint.includes('172.'));
+
+    if (isPrivateLan) {
+      // Local LAN router: Cloud backend cannot reach RFC1918 subnets over WAN.
+      // Check if router was recently seen by the cashier's app (within 15m) or already marked ONLINE.
+      const isRecentlySeen = router.lastSeen && Date.now() - router.lastSeen.getTime() < 15 * 60 * 1000;
+      const status = isRecentlySeen || router.status === RouterStatus.ONLINE ? RouterStatus.ONLINE : router.status;
+      return router;
+    }
+
     const reachable = await this.mikrotik.testConnection(router.endpoint, user, pass);
     const status = reachable ? RouterStatus.ONLINE : RouterStatus.OFFLINE;
 
@@ -70,6 +85,29 @@ export class RoutersService {
     const router = await this.getRouterById(id);
     const user = process.env.MIKROTIK_API_USER || 'admin';
     const pass = process.env.MIKROTIK_API_PASS || '';
+
+    const isPrivateLan =
+      !router.endpoint.includes('tunnel') &&
+      (router.connectionMode === 'local' ||
+        router.endpoint.includes('192.168.') ||
+        router.endpoint.includes('10.') ||
+        router.endpoint.includes('172.'));
+
+    if (isPrivateLan) {
+      const isRecentlySeen = router.lastSeen && Date.now() - router.lastSeen.getTime() < 15 * 60 * 1000;
+      const status = isRecentlySeen || router.status === RouterStatus.ONLINE ? RouterStatus.ONLINE : RouterStatus.OFFLINE;
+      return {
+        id: router.id,
+        name: router.name,
+        endpoint: router.endpoint,
+        status,
+        lastSeen: router.lastSeen,
+        reachable: status === RouterStatus.ONLINE,
+        resource: null,
+        timestamp: new Date(),
+      };
+    }
+
     const resource = await this.mikrotik.getSystemResource(router.endpoint, { username: user, password: pass });
     const reachable = resource !== null;
     const newStatus = reachable ? RouterStatus.ONLINE : RouterStatus.OFFLINE;
@@ -91,6 +129,16 @@ export class RoutersService {
       resource: resource || null,
       timestamp: new Date(),
     };
+  }
+
+  async recordHeartbeat(id: string, data?: { status?: string; latencyMs?: number }) {
+    return this.prisma.router.update({
+      where: { id },
+      data: {
+        status: RouterStatus.ONLINE,
+        lastSeen: new Date(),
+      },
+    });
   }
 
   async rebootRouter(id: string) {

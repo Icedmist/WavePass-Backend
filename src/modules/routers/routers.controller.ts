@@ -36,6 +36,11 @@ export class RoutersController {
     return this.routers.rebootRouter(id);
   }
 
+  @Post(':id/heartbeat')
+  heartbeat(@Param('id') id: string, @Body() body?: { status?: string; latencyMs?: number }) {
+    return this.routers.recordHeartbeat(id, body);
+  }
+
   @Get(':id/provision.rsc')
   getProvisionScript(@Param('id') id: string) {
     return this.routers.generateProvisionScript(id);
