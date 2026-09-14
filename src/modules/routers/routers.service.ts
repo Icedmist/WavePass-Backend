@@ -33,6 +33,31 @@ export class RoutersService {
   }
 
   async createRouter(dto: CreateRouterDto) {
+    const existing = await this.prisma.router.findFirst({
+      where: {
+        venueId: dto.venueId,
+        OR: [
+          { endpoint: dto.endpoint },
+          { name: dto.name },
+        ],
+      },
+    });
+
+    if (existing) {
+      const updated = await this.prisma.router.update({
+        where: { id: existing.id },
+        data: {
+          name: dto.name,
+          endpoint: dto.endpoint,
+          connectionMode: dto.connectionMode,
+          rosVersion: dto.rosVersion,
+          status: RouterStatus.ONLINE,
+          lastSeen: new Date(),
+        },
+      });
+      return updated;
+    }
+
     const router = await this.prisma.router.create({
       data: {
         venueId: dto.venueId,
