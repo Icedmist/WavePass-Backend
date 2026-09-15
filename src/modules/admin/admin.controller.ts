@@ -103,4 +103,58 @@ export class AdminController {
   verifyReference(@Param('reference') reference: string) {
     return this.admin.verifyReference(reference);
   }
+
+  // ── Fleet & System Health ────────────────────────────────────────────────
+
+  @Get('fleet')
+  fleet() {
+    return this.admin.getFleetOverview();
+  }
+
+  @Get('system-health')
+  systemHealth() {
+    return this.admin.getSystemHealth();
+  }
+
+  // ── Audits Engine ────────────────────────────────────────────────────────
+
+  @Get('audits')
+  getAudits(@Query('category') category?: string, @Query('limit') limit?: string) {
+    return this.admin.getAuditLogs(category, limit ? parseInt(limit, 10) : 100);
+  }
+
+  @Post('audits')
+  logAudit(@Body() body: { action: string; category?: string; actor?: string; details?: any; status?: string }) {
+    return this.admin.logAudit(body);
+  }
+
+  // ── Activation Codes ─────────────────────────────────────────────────────
+
+  @Get('activation-codes')
+  listActivationCodes() {
+    return this.admin.listActivationCodes();
+  }
+
+  @Post('activation-codes/generate')
+  generateActivationCodes(
+    @Body() body: { count?: number; note?: string; quota?: number; createdBy?: string },
+  ) {
+    return this.admin.generateActivationCodes(body.count, body.note, body.quota, body.createdBy);
+  }
+
+  @Post('activation-codes/authorize')
+  authorizeActivationCode(@Body() body: { code: string; status?: 'AUTHORIZED' | 'REVOKED' }) {
+    return this.admin.authorizeActivationCode(body.code, body.status || 'AUTHORIZED');
+  }
+
+  @Get('activation-codes/check/:email')
+  checkActivation(@Param('email') email: string) {
+    return this.admin.checkAccountActivation(email);
+  }
+
+  @Post('activation-codes/redeem')
+  redeemActivationCode(@Body() body: { code: string; email: string; venueId?: string }) {
+    return this.admin.redeemActivationCode(body.code, body.email, body.venueId);
+  }
 }
+

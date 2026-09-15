@@ -304,4 +304,314 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
     }
     return { email: targetEmail, status: 'deleted' };
   }
+
+  // ── Fleet & System Health ────────────────────────────────────────────────
+
+  async getFleetOverview() {
+    try {
+      const venues = await this.prisma.venue.findMany({
+        include: {
+          routers: true,
+          _count: {
+            select: {
+              sessions: { where: { status: 'ACTIVE' } },
+              vouchers: true,
+              plans: true,
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      const totalRouters = venues.reduce((acc, v) => acc + v.routers.length, 0);
+      const onlineRouters = venues.reduce(
+        (acc, v) => acc + v.routers.filter((r) => r.status === 'ONLINE').length,
+        0,
+      );
+      const totalActiveSessions = venues.reduce((acc, v) => acc + v._count.sessions, 0);
+      const totalVouchers = venues.reduce((acc, v) => acc + v._count.vouchers, 0);
+
+      return {
+        ok: true,
+        summary: {
+          totalVenues: venues.length,
+          totalRouters,
+          onlineRouters,
+          offlineRouters: totalRouters - onlineRouters,
+          totalActiveSessions,
+          totalVouchers,
+        },
+        venues: venues.map((v) => ({
+          id: v.id,
+          name: v.name,
+          slug: v.slug,
+          status: v.status,
+          currency: v.currency,
+          createdAt: v.createdAt,
+          routers: v.routers.map((r) => ({
+            id: r.id,
+            name: r.name,
+            endpoint: r.endpoint,
+            status: r.status,
+            connectionMode: r.connectionMode,
+            rosVersion: r.rosVersion,
+            lastSeen: r.lastSeen,
+          })),
+          activeSessions: v._count.sessions,
+          vouchersCount: v._count.vouchers,
+          plansCount: v._count.plans,
+        })),
+      };
+    } catch (err: any) {
+      return { ok: false, error: `Failed to fetch fleet overview: ${err.message}` };
+    }
+  }
+
+  async getSystemHealth() {
+    let dbStatus = 'ok';
+    let dbLatencyMs = 0;
+    try {
+      const start = Date.now();
+      await this.prisma.$queryRawUnsafe('SELECT 1');
+      dbLatencyMs = Date.now() - start;
+    } catch (err: any) {
+      dbStatus = `error: ${err.message}`;
+    }
+
+    const memoryUsage = process.memoryUsage();
+
+    return {
+      ok: true,
+      status: dbStatus === 'ok' ? 'HEALTHY' : 'DEGRADED',
+      timestamp: new Date().toISOString(),
+      uptimeSeconds: Math.floor(process.uptime()),
+      database: {
+        status: dbStatus,
+        latencyMs: dbLatencyMs,
+      },
+      memory: {
+        rssMB: Math.round(memoryUsage.rss / 1024 / 1024),
+        heapUsedMB: Math.round(memoryUsage.heapUsed / 1024 / 1024),
+        heapTotalMB: Math.round(memoryUsage.heapTotal / 1024 / 1024),
+      },
+      environment: process.env.NODE_ENV || 'production',
+      nodeVersion: process.version,
+    };
+  }
+
+  // ── Audits Engine ────────────────────────────────────────────────────────
+
+  private auditLogs: Array<{
+    id: string;
+    action: string;
+    category: string;
+    actor: string;
+    details?: any;
+    status: string;
+    timestamp: string;
+  }> = [
+    {
+      id: 'init-1',
+      action: 'SYSTEM_BOOT',
+      category: 'SYSTEM',
+      actor: 'system',
+      details: { platform: 'WavePass Cloud Engine' },
+      status: 'SUCCESS',
+      timestamp: new Date().toISOString(),
+    },
+  ];
+
+  async getAuditLogs(category?: string, limit = 100) {
+    let logs = [...this.auditLogs];
+    if (category && category.trim().length > 0) {
+      logs = logs.filter((l) => l.category.toLowerCase() === category.toLowerCase());
+    }
+    return {
+      ok: true,
+      count: logs.length,
+      logs: logs.slice(0, limit),
+    };
+  }
+
+  async logAudit(entry: {
+    action: string;
+    category?: string;
+    actor?: string;
+    details?: any;
+    status?: string;
+  }) {
+    const record = {
+      id: `audit_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      action: entry.action,
+      category: entry.category || 'GENERAL',
+      actor: entry.actor || 'system',
+      details: entry.details,
+      status: entry.status || 'SUCCESS',
+      timestamp: new Date().toISOString(),
+    };
+    this.auditLogs.unshift(record);
+    if (this.auditLogs.length > 2000) {
+      this.auditLogs.pop();
+    }
+    return { ok: true, record };
+  }
+
+  // ── Activation Code Engine ───────────────────────────────────────────────
+
+  private activationCodes: Array<{
+    code: string;
+    status: 'AUTHORIZED' | 'PENDING' | 'USED' | 'REVOKED';
+    createdBy: string;
+    createdAt: string;
+    authorizedAt?: string;
+    redeemedBy?: string;
+    venueId?: string;
+    usedAt?: string;
+    quota: number;
+    notes?: string;
+  }> = [
+    {
+      code: 'WP-ACT-NEXA-2025',
+      status: 'AUTHORIZED',
+      createdBy: 'talk2icedmist@gmail.com',
+      createdAt: new Date().toISOString(),
+      authorizedAt: new Date().toISOString(),
+      quota: 1,
+      notes: 'Master activation code for initial system rollout',
+    },
+    {
+      code: 'WP-ACT-VIP-8899',
+      status: 'AUTHORIZED',
+      createdBy: 'talk2icedmist@gmail.com',
+      createdAt: new Date().toISOString(),
+      authorizedAt: new Date().toISOString(),
+      quota: 1,
+      notes: 'Production rollout voucher activation',
+    },
+  ];
+
+  async listActivationCodes() {
+    return {
+      ok: true,
+      count: this.activationCodes.length,
+      codes: this.activationCodes,
+    };
+  }
+
+  async generateActivationCodes(count = 1, note?: string, quota = 1, createdBy = 'talk2icedmist@gmail.com') {
+    const generated: any[] = [];
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+    for (let i = 0; i < count; i++) {
+      let part1 = '';
+      let part2 = '';
+      for (let j = 0; j < 4; j++) {
+        part1 += chars[Math.floor(Math.random() * chars.length)];
+        part2 += chars[Math.floor(Math.random() * chars.length)];
+      }
+      const code = `WP-ACT-${part1}-${part2}`;
+      const record = {
+        code,
+        status: 'AUTHORIZED' as const,
+        createdBy,
+        createdAt: new Date().toISOString(),
+        authorizedAt: new Date().toISOString(),
+        quota: quota || 1,
+        notes: note || 'Venue Activation Code',
+      };
+      this.activationCodes.unshift(record);
+      generated.push(record);
+    }
+
+    await this.logAudit({
+      action: 'ACTIVATION_CODES_GENERATED',
+      category: 'ACTIVATION',
+      actor: createdBy,
+      details: { count, codes: generated.map((g) => g.code) },
+    });
+
+    return { ok: true, count: generated.length, codes: generated };
+  }
+
+  async authorizeActivationCode(code: string, status: 'AUTHORIZED' | 'REVOKED') {
+    const item = this.activationCodes.find((c) => c.code.toUpperCase() === code.toUpperCase());
+    if (!item) {
+      return { ok: false, error: 'Activation code not found' };
+    }
+    item.status = status;
+    if (status === 'AUTHORIZED') {
+      item.authorizedAt = new Date().toISOString();
+    }
+    await this.logAudit({
+      action: status === 'AUTHORIZED' ? 'ACTIVATION_CODE_AUTHORIZED' : 'ACTIVATION_CODE_REVOKED',
+      category: 'ACTIVATION',
+      actor: 'system_admin',
+      details: { code },
+    });
+    return { ok: true, code: item };
+  }
+
+  async checkAccountActivation(email: string) {
+    const cleanEmail = email.toLowerCase().trim();
+    // System admin is permanently activated
+    if (cleanEmail === 'talk2icedmist@gmail.com') {
+      return { ok: true, activated: true, role: 'system_admin', code: 'SUPER-ADMIN' };
+    }
+
+    const match = this.activationCodes.find(
+      (c) => c.status === 'USED' && c.redeemedBy?.toLowerCase() === cleanEmail,
+    );
+
+    return {
+      ok: true,
+      activated: !!match,
+      code: match?.code,
+      venueId: match?.venueId,
+      usedAt: match?.usedAt,
+    };
+  }
+
+  async redeemActivationCode(code: string, email: string, venueId?: string) {
+    const cleanCode = code.toUpperCase().trim();
+    const cleanEmail = email.toLowerCase().trim();
+
+    const item = this.activationCodes.find((c) => c.code.toUpperCase() === cleanCode);
+    if (!item) {
+      await this.logAudit({
+        action: 'ACTIVATION_CODE_REDEEM_FAILED',
+        category: 'ACTIVATION',
+        actor: cleanEmail,
+        details: { code: cleanCode, reason: 'NOT_FOUND' },
+        status: 'FAILURE',
+      });
+      return { ok: false, error: 'Invalid activation code' };
+    }
+
+    if (item.status === 'USED') {
+      return { ok: false, error: 'Activation code has already been redeemed' };
+    }
+
+    if (item.status === 'REVOKED' || item.status === 'PENDING') {
+      return { ok: false, error: 'Activation code is not authorized. Please contact system admin.' };
+    }
+
+    item.status = 'USED';
+    item.redeemedBy = cleanEmail;
+    item.venueId = venueId;
+    item.usedAt = new Date().toISOString();
+
+    await this.logAudit({
+      action: 'ACTIVATION_CODE_REDEEMED',
+      category: 'ACTIVATION',
+      actor: cleanEmail,
+      details: { code: cleanCode, venueId },
+      status: 'SUCCESS',
+    });
+
+    return {
+      ok: true,
+      message: 'Venue activated successfully! You can now set up your router.',
+      code: item,
+    };
+  }
 }
