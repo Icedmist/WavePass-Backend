@@ -42,7 +42,7 @@ export class VirtualAccountsService {
 
   private likelyMailTo(venueName: string): string {
     const slug = venueName.toLowerCase().replace(/[^a-z0-9]+/g, '.');
-    return `venue.${slug || 'wavepass'}@nexa-pay.local`;
+    return `venue.${slug || 'wavepass'}@nexawavepass.com`;
   }
 
   /** Ensure a DVA exists for a venue — idempotent. */
@@ -65,20 +65,39 @@ export class VirtualAccountsService {
       customer = existingCustomer
         ? { customer_code: existingCustomer.customerCode! }
         : await this.paystack.createCustomer(email, { first_name: venue.name });
-    } catch (err) {
-      customer = await this.paystack.createCustomer(email, { first_name: venue.name });
+    } catch (err: any) {
+      this.logger.warn(`Could not fetch existing customer for venue: ${err.message}; creating new customer`);
+      try {
+        customer = await this.paystack.createCustomer(email, { first_name: venue.name });
+      } catch (custErr: any) {
+        this.logger.warn(`Could not create customer on Paystack: ${custErr.message}`);
+        customer = { customer_code: `cus_local_${venue.id.slice(0, 8)}` };
+      }
     }
 
-    const dva = await this.paystack.createDedicatedAccount({
-      customer: customer.customer_code,
-      preferredBank: opts?.preferredBank,
-      metadata: { venueId: venue.id, venueSlug: venue.slug, platform: 'nexa-wavepass' },
-    });
+    let dva: any = null;
+    try {
+      dva = await this.paystack.createDedicatedAccount({
+        customer: customer.customer_code,
+        preferredBank: opts?.preferredBank,
+        metadata: { venueId: venue.id, venueSlug: venue.slug, platform: 'nexa-wavepass' },
+      });
+    } catch (dvaErr: any) {
+      this.logger.warn(`Dedicated account creation on Paystack skipped/failed: ${dvaErr.message}`);
+    }
 
-    if (!dva.account_number) {
-      throw new ConflictException(
-        'Paystack did not return an account number — DVA may be pending allocation.',
-      );
+    if (!dva || !dva.account_number) {
+      return this.prisma.virtualAccount.create({
+        data: {
+          venueId: venue.id,
+          customerCode: customer.customer_code,
+          accountNumber: 'PENDING',
+          accountName: venue.name,
+          bankName: 'Paystack Dedicated NUBAN (Pending)',
+          status: 'PENDING',
+          metadata: { note: 'DVA pending activation or KYC on Paystack' },
+        },
+      });
     }
 
     return this.prisma.virtualAccount.create({
@@ -87,7 +106,7 @@ export class VirtualAccountsService {
         customerCode: customer.customer_code,
         accountNumber: String(dva.account_number),
         accountName: dva.account_name || venue.name,
-        bankName: dva.bank?.name,
+        bankName: dva.bank?.name || 'Wema Bank',
         splitCode: (dva as any).split_code || undefined,
         status: 'ACTIVE',
         metadata: { providerId: dva.id },

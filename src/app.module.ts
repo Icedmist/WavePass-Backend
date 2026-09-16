@@ -45,6 +45,9 @@ import { AdminAuthGuard } from './modules/admin/admin-auth.guard';
 import { VirtualAccountsController } from './modules/virtual-accounts/virtual-accounts.controller';
 import { VirtualAccountsService } from './modules/virtual-accounts/virtual-accounts.service';
 
+import { NotificationsController } from './modules/notifications/notifications.controller';
+import { NotificationsService } from './modules/notifications/notifications.service';
+
 import { CashoutsController } from './modules/cashouts/cashouts.controller';
 import { CashoutsService } from './modules/cashouts/cashouts.service';
 
@@ -94,6 +97,7 @@ import { HealthController } from './modules/health/health.controller';
     AdminController,
     VirtualAccountsController,
     CashoutsController,
+    NotificationsController,
     HealthController,
   ],
   providers: [
@@ -120,6 +124,7 @@ import { HealthController } from './modules/health/health.controller';
     MikrotikAdapter,
     VirtualAccountsService,
     CashoutsService,
+    NotificationsService,
   ],
 })
 export class AppModule {}

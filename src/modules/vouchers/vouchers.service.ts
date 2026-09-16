@@ -12,8 +12,12 @@ function humanCode(): string {
   return groups.join('-');
 }
 
+function normalizeCode(code: string): string {
+  return (code || '').trim().toUpperCase().replace(/\s+/g, '');
+}
+
 function hashCode(code: string): string {
-  return createHash('sha256').update(code).digest('hex');
+  return createHash('sha256').update(normalizeCode(code)).digest('hex');
 }
 
 @Injectable()
@@ -46,33 +50,58 @@ export class VouchersService {
 
   /** Atomic single-use redemption. Two concurrent attempts cannot both succeed (PRD §23). */
   async redeem(code: string, ctx: { deviceId?: string; ip?: string; mac?: string; routerId: string }) {
-    const codeHash = hashCode(code);
+    const normalized = normalizeCode(code);
+    const codeHash = hashCode(normalized);
+    const mac = ctx.mac?.toUpperCase().trim();
 
     const voucher = await this.prisma.$transaction(async (tx) => {
       // Row lock via a conditional update: only one caller can flip GENERATED/ISSUED -> REDEEMED.
-      const v = await tx.voucher.findUnique({ where: { codeHash } });
+      // Try exact hash first, then dash-insensitive fallback (user typed code without dashes).
+      let v = await tx.voucher.findUnique({ where: { codeHash } });
+      if (!v) {
+        const stripped = normalized.replace(/-/g, '');
+        const candidates = await (tx.voucher as any).findMany({
+          where: { displayCodeEnc: { not: null } },
+          select: { id: true, displayCodeEnc: true },
+          take: 500,
+        }).catch(() => []);
+        const match = (candidates as any[]).find(
+          (c) => (c.displayCodeEnc || '').toUpperCase().replace(/[\s-]/g, '') === stripped,
+        );
+        if (match) v = await tx.voucher.findUnique({ where: { id: match.id } });
+      }
       if (!v) throw new NotFoundException('Invalid voucher code');
       if (v.status === 'REVOKED') throw new GoneException('Voucher has been revoked');
       if (v.status === 'EXPIRED' || (v.expiresAt && v.expiresAt < new Date())) {
         throw new GoneException('Voucher has expired');
+      }
+      // Checkout-issued vouchers are already ACTIVE — claiming = returning credentials, not re-redeeming.
+      if (v.status === 'ACTIVE') {
+        const expiry = v.expiresAt ? v.expiresAt.getTime() : 0;
+        if (v.expiresAt && expiry < Date.now()) throw new GoneException('Voucher has expired');
+        return v;
+      }
+      // Idempotent re-claim from same device
+      if (v.status === 'REDEEMED' && mac && v.redeemedMac === mac) {
+        return v;
       }
       if (v.status !== 'ISSUED' && v.status !== 'GENERATED') {
         throw new ConflictException('Voucher already redeemed');
       }
 
       const updated = await tx.voucher.updateMany({
-        where: { codeHash, status: v.status }, // optimistic guard — fails if status changed under us
+        where: { codeHash: v.codeHash, status: v.status }, // optimistic guard — fails if status changed under us
         data: {
           status: 'REDEEMED',
           redeemedAt: new Date(),
           redeemedDeviceId: ctx.deviceId,
           redeemedIp: ctx.ip,
-          redeemedMac: ctx.mac,
+          redeemedMac: mac,
         },
       });
       if (updated.count === 0) throw new ConflictException('Voucher already redeemed');
 
-      return tx.voucher.findUniqueOrThrow({ where: { codeHash } });
+      return tx.voucher.findUniqueOrThrow({ where: { codeHash: v.codeHash } });
     });
 
     await this.provisioningQueue.enqueue({ voucherId: voucher.id });

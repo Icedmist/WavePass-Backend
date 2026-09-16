@@ -53,8 +53,11 @@ describe('MikrotikProvisioningProcessor', () => {
     expect(prisma.$transaction).toHaveBeenCalled();
   });
 
-  it('retry: throws when no router available', async () => {
-    const prisma = mockPrisma();
+  it('offline: creates cloud voucher and marks ACTIVE without router (no throw)', async () => {
+    const prisma = mockPrisma({
+      payment: { findUnique: vi.fn().mockResolvedValue(null) },
+      voucher: { create: vi.fn().mockResolvedValue({ id: 'v-off', displayCodeEnc: '123456' }) },
+    });
     const adapter = mockAdapter();
     const proc = new MikrotikProvisioningProcessor(prisma, adapter);
 
@@ -66,8 +69,13 @@ describe('MikrotikProvisioningProcessor', () => {
       venue: { id: 'venue-1', routers: [] },
     });
 
-    await expect((proc as any).provisionForOrder('order-2')).rejects.toThrow('No router available');
+    await (proc as any).provisionForOrder('order-2');
     expect(adapter.createHotspotUser).not.toHaveBeenCalled();
+    expect(prisma.voucher.create).toHaveBeenCalled();
+    expect(prisma.order.update).toHaveBeenCalledWith({
+      where: { id: 'order-2' },
+      data: { status: 'ACTIVE' },
+    });
   });
 
   it('failure: propagates Mikrotik adapter error for retry', async () => {

@@ -78,7 +78,10 @@ export class PaystackService {
   /** Whether the platform is running against a real Paystack key or the local mock. */
   isMock(): boolean {
     const secret = process.env.PAYSTACK_SECRET_KEY || '';
-    return !secret || secret.includes('xxx') || secret.includes('test');
+    if (!secret || secret === 'mock' || secret === 'placeholder' || secret.includes('xxx') || secret.startsWith('mock_')) {
+      return true;
+    }
+    return false;
   }
 
   private async post<T = any>(path: string, body: Record<string, unknown>): Promise<T> {

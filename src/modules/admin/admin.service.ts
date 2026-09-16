@@ -236,8 +236,7 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
       include: { order: { include: { plan: true } } },
     });
 
-    const secret = process.env.PAYSTACK_SECRET_KEY || '';
-    if (!secret || secret.includes('xxx')) {
+    if (this.paystack.isMock()) {
       return {
         verified: local?.status === 'FULFILLED',
         mode: 'mock',
@@ -250,10 +249,65 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
       const verifyRes = await this.paystack.verifyTransaction(reference);
       const isSuccess = verifyRes.data.status === 'success';
       if (isSuccess && local && local.status !== 'FULFILLED') {
-        await this.prisma.payment.update({
-          where: { id: local.id },
-          data: { status: 'FULFILLED', paidAt: new Date() },
-        });
+        const { createHash, randomInt } = await import('crypto');
+        const order = local.order as any;
+        const isMac = order.customerRef && /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/.test(order.customerRef);
+        const expiresAt = new Date(Date.now() + (order.plan?.durationSeconds || 3600) * 1000);
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const voucherCode = String(randomInt(100000, 1000000));
+          try {
+            await this.prisma.$transaction([
+              this.prisma.payment.update({
+                where: { id: local.id },
+                data: { status: 'FULFILLED', paidAt: new Date(), providerTransactionId: String(verifyRes.data.id) },
+              }),
+              this.prisma.voucher.create({
+                data: {
+                  venueId: order.venueId,
+                  planId: order.planId,
+                  paymentId: local.id,
+                  codeHash: createHash('sha256').update(voucherCode).digest('hex'),
+                  displayCodeEnc: voucherCode,
+                  status: 'ACTIVE',
+                  issuedAt: new Date(),
+                  redeemedAt: new Date(),
+                  expiresAt,
+                  redeemedMac: isMac ? order.customerRef.toUpperCase() : null,
+                  redeemedDeviceId: isMac ? order.customerRef.toUpperCase() : null,
+                  createdBy: 'admin_verify',
+                },
+              }),
+              this.prisma.order.update({
+                where: { id: local.orderId },
+                data: { status: 'PROVISIONING' },
+              }),
+            ]);
+            break;
+          } catch (err: any) {
+            if (err.code === 'P2002') continue;
+            throw err;
+          }
+        }
+        try {
+          const db = this.prisma as any;
+          if (db.notification) {
+            await db.notification.create({
+              data: {
+                venueId: order.venueId,
+                type: 'PAYMENT',
+                title: `Payment verified — ${(order.amountMinor / 100).toLocaleString('en-NG', { style: 'currency', currency: 'NGN' })}`,
+                body: `Reference ${reference} verified. Voucher is active.`,
+                amountMinor: order.amountMinor,
+                reference,
+              },
+            });
+          }
+        } catch {}
+        try {
+          await this.provisioningQueue.enqueue({ orderId: local.orderId });
+        } catch (err: any) {
+          this.logger.warn(`Provisioning enqueue failed after admin verify: ${err.message}`);
+        }
       }
       return {
         verified: isSuccess,

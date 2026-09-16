@@ -47,8 +47,12 @@ export class PortalController {
   }
 
   @Get('active-session')
-  activeSession(@Query('mac') mac?: string, @Query('ip') ip?: string) {
-    return this.portal.getDeviceActiveAccess(mac, ip);
+  activeSession(
+    @Query('mac') mac?: string,
+    @Query('ip') ip?: string,
+    @Query('reference') reference?: string,
+  ) {
+    return this.portal.getDeviceActiveAccess(mac, ip, reference);
   }
 
   @Get('device/:mac/active-voucher')
@@ -59,5 +63,19 @@ export class PortalController {
   @Get('sessions/:mac')
   sessionStatus(@Param('mac') mac: string) {
     return this.portal.getSessionStatus(mac);
+  }
+
+  @Get('router-sync')
+  async routerSync(
+    @Query('venue') venueSlug?: string,
+    @Query('venueId') venueId?: string,
+    @Query('format') format?: string,
+    @Res() res?: FastifyReply,
+  ) {
+    const result = await this.portal.generateRouterSyncScript(venueSlug, venueId, format);
+    if (format === 'json') {
+      return res?.status(200).send(result);
+    }
+    return res?.status(200).header('Content-Type', 'text/plain; charset=utf-8').send(result);
   }
 }

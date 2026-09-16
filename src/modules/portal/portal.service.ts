@@ -67,8 +67,8 @@ export class PortalService {
       },
     });
 
-    // 4. If offline/mock mode (no Paystack key or dummy xxxxx)
-    const isMock = !this.paystackSecret || this.paystackSecret.includes('xxx');
+    // 4. If offline/mock mode (no Paystack key) — single source of truth is PaystackService.isMock()
+    const isMock = this.paystack.isMock();
     if (isMock) {
       const mockUrl = `${this.frontendUrl}/success?reference=${reference}&mac=${encodeURIComponent(mac)}&plan=${plan.id}&mock=1`;
       return {
@@ -117,23 +117,76 @@ export class PortalService {
 
     const payment = await this.prisma.payment.findUniqueOrThrow({
       where: { providerReference: initResult.reference },
-      include: { order: true },
+      include: { order: { include: { plan: true } } },
     });
 
-    // Atomically fulfill payment
-    await this.prisma.$transaction([
-      this.prisma.payment.update({
-        where: { id: payment.id },
-        data: { status: 'FULFILLED', paidAt: new Date() },
-      }),
-      this.prisma.order.update({
-        where: { id: payment.orderId },
-        data: { status: 'PROVISIONING' },
-      }),
-    ]);
+    // Atomically fulfill payment + create ACTIVE voucher so mock checkout verifies
+    // even when no router is paired (provisioning would otherwise leave PROVISIONING with no voucher).
+    const { createHash, randomInt } = await import('crypto');
+    const mac = body.mac.toUpperCase();
+    const isMac = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/.test(mac);
+    const expiresAt = new Date(Date.now() + payment.order.plan.durationSeconds * 1000);
+    let voucherCode = '';
+    for (let attempt = 0; attempt < 5; attempt++) {
+      voucherCode = String(randomInt(100000, 1000000));
+      try {
+        await this.prisma.$transaction([
+          this.prisma.payment.update({
+            where: { id: payment.id },
+            data: { status: 'FULFILLED', paidAt: new Date() },
+          }),
+          this.prisma.voucher.create({
+            data: {
+              venueId: payment.order.venueId,
+              planId: payment.order.planId,
+              paymentId: payment.id,
+              codeHash: createHash('sha256').update(voucherCode).digest('hex'),
+              displayCodeEnc: voucherCode,
+              status: 'ACTIVE',
+              issuedAt: new Date(),
+              redeemedAt: new Date(),
+              expiresAt,
+              redeemedMac: isMac ? mac : null,
+              redeemedDeviceId: isMac ? mac : null,
+              createdBy: 'simulate_payment',
+            },
+          }),
+          this.prisma.order.update({
+            where: { id: payment.orderId },
+            data: { status: 'PROVISIONING' },
+          }),
+        ]);
+        break;
+      } catch (err: any) {
+        if (err.code === 'P2002') continue;
+        throw err;
+      }
+    }
 
-    // Enqueue provisioning
-    await this.provisioningQueue.enqueue({ orderId: payment.orderId });
+    // Venue-owner notification (best effort)
+    try {
+      const db = this.prisma as any;
+      if (db.notification) {
+        const ngn = (payment.order.amountMinor / 100).toLocaleString('en-NG', { style: 'currency', currency: 'NGN' });
+        await db.notification.create({
+          data: {
+            venueId: payment.order.venueId,
+            type: 'PAYMENT',
+            title: `Payment received — ${ngn}`,
+            body: `${payment.order.plan?.name || 'Wi-Fi pass'} paid (${initResult.reference}). Voucher ${voucherCode} is active.`,
+            amountMinor: payment.order.amountMinor,
+            reference: initResult.reference,
+          },
+        });
+      }
+    } catch {}
+
+    // Enqueue provisioning (allowed to fail — voucher already ACTIVE for router-sync)
+    try {
+      await this.provisioningQueue.enqueue({ orderId: payment.orderId });
+    } catch (err: any) {
+      this.logger.warn(`Provisioning enqueue failed after simulate: ${(err as Error).message}`);
+    }
 
     return {
       ok: true,
@@ -186,10 +239,48 @@ export class PortalService {
     return `${base}/portal?${qs.toString()}`;
   }
 
-  async getLandingStatus(mac?: string, ip?: string) {
-    const normalized = (mac || '').toUpperCase().trim();
+  async getDeviceActiveAccess(mac?: string, ip?: string, reference?: string) {
+    return this.getLandingStatus(mac, ip, reference);
+  }
+
+  async getLandingStatus(mac?: string, ip?: string, reference?: string) {
+    let normalized = (mac || '').toUpperCase().trim();
     let session: any = null;
-    if (normalized) {
+
+    if (reference) {
+      const payment = await this.prisma.payment.findUnique({
+        where: { providerReference: reference },
+        include: {
+          order: { include: { plan: true, venue: { include: { routers: true } } } },
+          vouchers: { include: { plan: true } },
+        },
+      });
+      if (payment) {
+        if (!normalized && payment.order.customerRef) {
+          normalized = (payment.order.customerRef || '').toUpperCase().trim();
+        }
+        const v = payment.vouchers[0] || await this.prisma.voucher.findFirst({
+          where: { paymentId: payment.id },
+          include: { plan: true },
+        });
+        if (v) {
+          const durationMs = (v.plan?.durationSeconds || payment.order.plan?.durationSeconds || 3600) * 1000;
+          const expiry = v.expiresAt ? v.expiresAt.getTime() : (v.redeemedAt ? v.redeemedAt.getTime() + durationMs : Date.now() + durationMs);
+          session = await this.prisma.session.findFirst({
+            where: { orderId: payment.orderId },
+            include: { router: { select: { id: true, name: true, endpoint: true } }, voucher: { include: { plan: true } } },
+          }) || {
+            id: `v_${v.id}`,
+            mac: normalized || payment.order.customerRef,
+            voucher: v,
+            expiresAt: new Date(expiry),
+            startedAt: v.redeemedAt || v.issuedAt || new Date(),
+          };
+        }
+      }
+    }
+
+    if (!session && normalized) {
       session = await this.prisma.session.findFirst({
         where: { mac: normalized, status: 'ACTIVE' },
         include: { router: { select: { id: true, name: true, endpoint: true } }, voucher: { include: { plan: true } } },
@@ -205,11 +296,11 @@ export class PortalService {
       });
     }
 
-    // Fallback 2: check if device has a redeemed active voucher even if session record was reset
+    // Fallback 2: check if device has a redeemed/active voucher even if session record was reset
     let activeVoucher: any = null;
     if (!session && normalized) {
       const redeemedVouchers = await this.prisma.voucher.findMany({
-        where: { redeemedMac: normalized, status: 'REDEEMED' },
+        where: { redeemedMac: normalized, status: { in: ['REDEEMED', 'ACTIVE'] } },
         include: { plan: true, venue: true },
         orderBy: { redeemedAt: 'desc' },
         take: 3,
@@ -291,6 +382,10 @@ export class PortalService {
       const plans = await this.plansService.listPlans(venue.id);
       return {
         hasPaid: false,
+        // Backward-compat aliases for the legacy getDeviceActiveAccess shape
+        // consumed by web portal/page.tsx (hasActiveAccess/remainingFormatted).
+        hasActiveAccess: false,
+        source: null,
         isConnectedOnRouter: false,
         walledGardenOpen: true,
         mac: normalized || null,
@@ -299,6 +394,8 @@ export class PortalService {
         username: null,
         password: null,
         remainingMs: 0,
+        remainingSeconds: 0,
+        remainingFormatted: '00:00:00',
         dataUsedBytes: 0,
         dataLimitBytes: null,
         dataExhaustedPct: 0,
@@ -322,6 +419,10 @@ export class PortalService {
 
     return {
       hasPaid,
+      // Backward-compat aliases for the legacy getDeviceActiveAccess shape
+      // consumed by web portal/page.tsx (hasActiveAccess/remainingFormatted).
+      hasActiveAccess: hasPaid,
+      source: session?.voucher ? 'voucher' : live ? 'mikrotik' : session ? 'online' : null,
       isConnectedOnRouter,
       walledGardenOpen: true,
       mac: normalized,
@@ -331,7 +432,10 @@ export class PortalService {
       username: credUser,
       password: credUser,
       planName: session?.voucher?.plan?.name || 'Internet Pass',
+      durationSeconds: session?.voucher?.plan?.durationSeconds || Math.floor(remainingMs / 1000),
       remainingMs,
+      remainingSeconds: Math.floor(remainingMs / 1000),
+      remainingFormatted: this.formatRemaining(remainingMs),
       expiresAt: session?.expiresAt || new Date(now + remainingMs),
       startedAt: session?.startedAt || new Date(),
       dataUsedBytes,
@@ -349,327 +453,6 @@ export class PortalService {
     return this.getLandingStatus(mac);
   }
 
-  /**
-   * Resolves active access (allocated voucher or online pass) tied to a client MAC address.
-   * Enables connected/reconnecting devices to view their assigned voucher and reconnect with 1 tap.
-   */
-  async getDeviceActiveAccess(mac?: string, ip?: string) {
-    const normalized = (mac || '').toUpperCase().trim();
-    if (!normalized && !ip) {
-      return {
-        hasActiveAccess: false,
-        mac: null,
-        source: null,
-        voucherCode: null,
-        username: null,
-        password: null,
-        planName: null,
-        durationSeconds: 0,
-        remainingMs: 0,
-        remainingSeconds: 0,
-        remainingFormatted: '00:00:00',
-        expiresAt: null,
-        startedAt: null,
-        reconnectUrl: null,
-        message: 'No device MAC address or IP provided',
-      };
-    }
-
-    const now = Date.now();
-
-    // 1. Probe MikroTik router directly for live user & active session
-    let targetRouter = await this.prisma.router.findFirst({
-      where: { status: 'ONLINE' },
-      orderBy: { lastSeen: 'desc' },
-    });
-
-    let rActive: any = null;
-    let rUser: any = null;
-    let routerRemainingMs: number | null = null;
-    let mikrotikAdapter: any = null;
-    const mikrotikCreds = {
-      username: process.env.MIKROTIK_API_USER || 'admin',
-      password: process.env.MIKROTIK_API_PASS || '',
-    };
-
-    if (targetRouter?.endpoint) {
-      try {
-        const { MikrotikAdapter } = await import('../mikrotik/mikrotik.adapter');
-        mikrotikAdapter = new MikrotikAdapter();
-
-        const rows = await mikrotikAdapter.getActiveHotspotData(targetRouter.endpoint, mikrotikCreds);
-        rActive = rows.find((r: any) =>
-          (normalized && String(r['mac-address'] || r.mac || '').toUpperCase() === normalized) ||
-          (normalized && String(r.user || '').toUpperCase() === normalized) ||
-          (ip && String(r.address || r.ip || '') === ip)
-        );
-
-        if (rActive) {
-          if (rActive['session-time-left']) {
-            const parsed = mikrotikAdapter.parseRouterOsDuration(rActive['session-time-left']);
-            if (parsed > 0) routerRemainingMs = parsed * 1000;
-          }
-          if (rActive.user) {
-            rUser = await mikrotikAdapter.getHotspotUserData(targetRouter.endpoint, mikrotikCreds, rActive.user);
-          }
-        }
-
-        if (!rUser && normalized) {
-          rUser = await mikrotikAdapter.getHotspotUserData(targetRouter.endpoint, mikrotikCreds, normalized);
-        }
-
-        if (rUser) {
-          const limitSec = mikrotikAdapter.parseRouterOsDuration(rUser['limit-uptime']);
-          const uptimeSec = mikrotikAdapter.parseRouterOsDuration(rUser.uptime);
-          if (limitSec > 0 && routerRemainingMs === null) {
-            routerRemainingMs = Math.max(0, limitSec - uptimeSec) * 1000;
-          }
-        }
-      } catch (err) {
-        this.logger.warn(`Failed to inspect MikroTik router for client ${normalized}: ${(err as Error).message}`);
-      }
-    }
-
-    // If active user or session is confirmed directly on MikroTik router
-    if (rUser || rActive) {
-      const remainingMs = routerRemainingMs !== null ? routerRemainingMs : 3600000;
-      if (remainingMs > 0) {
-        const u = rUser?.name || rActive?.user || normalized;
-        const p = rUser?.password || u;
-        return {
-          hasActiveAccess: true,
-          isConnectedOnRouter: !!rActive,
-          mac: normalized || rActive?.['mac-address'] || rUser?.['mac-address'],
-          source: 'mikrotik',
-          voucherCode: u,
-          username: u,
-          password: p,
-          planName: rUser?.profile || 'MikroTik HotSpot Pass',
-          durationSeconds: Math.floor(remainingMs / 1000),
-          remainingMs,
-          remainingSeconds: Math.floor(remainingMs / 1000),
-          remainingFormatted: this.formatRemaining(remainingMs),
-          expiresAt: new Date(now + remainingMs).toISOString(),
-          startedAt: null,
-          reconnectUrl: `http://192.168.88.1/login?username=${encodeURIComponent(u)}&password=${encodeURIComponent(p)}`,
-        };
-      }
-    }
-
-    // 2. Check for active Session in database
-    let session: any = null;
-    if (normalized) {
-      session = await this.prisma.session.findFirst({
-        where: {
-          mac: normalized,
-          status: 'ACTIVE',
-          OR: [{ expiresAt: { gt: new Date(now) } }, { expiresAt: null }],
-        },
-        include: {
-          voucher: { include: { plan: true } },
-          router: { select: { id: true, name: true, endpoint: true } },
-        },
-        orderBy: { startedAt: 'desc' },
-      });
-    }
-
-    if (!session && ip) {
-      session = await this.prisma.session.findFirst({
-        where: {
-          ip,
-          status: 'ACTIVE',
-          OR: [{ expiresAt: { gt: new Date(now) } }, { expiresAt: null }],
-        },
-        include: {
-          voucher: { include: { plan: true } },
-          router: { select: { id: true, name: true, endpoint: true } },
-        },
-        orderBy: { startedAt: 'desc' },
-      });
-    }
-
-    // 3. Check for active redeemed Voucher tied to this MAC
-    let activeVoucher: any = null;
-    if (normalized) {
-      const redeemedVouchers = await this.prisma.voucher.findMany({
-        where: {
-          redeemedMac: normalized,
-          status: 'REDEEMED',
-        },
-        include: { plan: true, venue: true },
-        orderBy: { redeemedAt: 'desc' },
-        take: 5,
-      });
-
-      for (const v of redeemedVouchers) {
-        const durationMs = (v.plan?.durationSeconds || 3600) * 1000;
-        const expiry = v.expiresAt ? v.expiresAt.getTime() : (v.redeemedAt ? v.redeemedAt.getTime() + durationMs : 0);
-        if (expiry > now) {
-          activeVoucher = { ...v, calculatedExpiry: new Date(expiry) };
-          break;
-        }
-      }
-    }
-
-    // 4. Check for active Paystack online order tied to this MAC
-    let activeOrder: any = null;
-    if (normalized) {
-      const orders = await this.prisma.order.findMany({
-        where: {
-          customerRef: normalized,
-          status: 'ACTIVE',
-        },
-        include: { plan: true, venue: true },
-        orderBy: { createdAt: 'desc' },
-        take: 5,
-      });
-
-      for (const ord of orders) {
-        const durationMs = (ord.plan?.durationSeconds || 3600) * 1000;
-        const expiry = ord.createdAt.getTime() + durationMs;
-        if (expiry > now) {
-          activeOrder = { ...ord, calculatedExpiry: new Date(expiry) };
-          break;
-        }
-      }
-    }
-
-    // Prioritize voucher session if available - query router for live remaining time
-    if (session && session.voucher) {
-      const code = session.voucher.displayCodeEnc || session.voucher.id;
-      let remainingMs = session.expiresAt ? Math.max(0, session.expiresAt.getTime() - now) : 3600000;
-
-      if (targetRouter?.endpoint && mikrotikAdapter && code) {
-        try {
-          const rVch = await mikrotikAdapter.getHotspotUserData(targetRouter.endpoint, mikrotikCreds, code);
-          if (rVch) {
-            const limitSec = mikrotikAdapter.parseRouterOsDuration(rVch['limit-uptime']);
-            const uptimeSec = mikrotikAdapter.parseRouterOsDuration(rVch.uptime);
-            if (limitSec > 0) {
-              remainingMs = Math.max(0, limitSec - uptimeSec) * 1000;
-            }
-          }
-        } catch {}
-      }
-
-      return {
-        hasActiveAccess: remainingMs > 0,
-        isConnectedOnRouter: !!rActive,
-        mac: normalized || session.mac,
-        source: 'voucher',
-        voucherCode: code,
-        username: code,
-        password: code,
-        planName: session.voucher.plan?.name || 'Voucher Pass',
-        durationSeconds: session.voucher.plan?.durationSeconds || 3600,
-        remainingMs,
-        remainingSeconds: Math.floor(remainingMs / 1000),
-        remainingFormatted: this.formatRemaining(remainingMs),
-        expiresAt: new Date(now + remainingMs).toISOString(),
-        startedAt: session.startedAt ? session.startedAt.toISOString() : null,
-        reconnectUrl: `http://192.168.88.1/login?username=${encodeURIComponent(code)}&password=${encodeURIComponent(code)}`,
-      };
-    }
-
-    if (activeVoucher) {
-      const code = activeVoucher.displayCodeEnc || activeVoucher.id;
-      let remainingMs = Math.max(0, activeVoucher.calculatedExpiry.getTime() - now);
-
-      if (targetRouter?.endpoint && mikrotikAdapter && code) {
-        try {
-          const rVch = await mikrotikAdapter.getHotspotUserData(targetRouter.endpoint, mikrotikCreds, code);
-          if (rVch) {
-            const limitSec = mikrotikAdapter.parseRouterOsDuration(rVch['limit-uptime']);
-            const uptimeSec = mikrotikAdapter.parseRouterOsDuration(rVch.uptime);
-            if (limitSec > 0) {
-              remainingMs = Math.max(0, limitSec - uptimeSec) * 1000;
-            }
-          }
-        } catch {}
-      }
-
-      return {
-        hasActiveAccess: remainingMs > 0,
-        isConnectedOnRouter: !!rActive,
-        mac: normalized,
-        source: 'voucher',
-        voucherCode: code,
-        username: code,
-        password: code,
-        planName: activeVoucher.plan?.name || 'Voucher Pass',
-        durationSeconds: activeVoucher.plan?.durationSeconds || 3600,
-        remainingMs,
-        remainingSeconds: Math.floor(remainingMs / 1000),
-        remainingFormatted: this.formatRemaining(remainingMs),
-        expiresAt: new Date(now + remainingMs).toISOString(),
-        startedAt: activeVoucher.redeemedAt ? activeVoucher.redeemedAt.toISOString() : null,
-        reconnectUrl: `http://192.168.88.1/login?username=${encodeURIComponent(code)}&password=${encodeURIComponent(code)}`,
-      };
-    }
-
-    if (session && !session.voucher) {
-      const user = session.mac || normalized;
-      const exp = session.expiresAt ? session.expiresAt.getTime() : (now + 3600000);
-      const remainingMs = Math.max(0, exp - now);
-      return {
-        hasActiveAccess: remainingMs > 0,
-        isConnectedOnRouter: !!rActive,
-        mac: normalized || session.mac,
-        source: 'online',
-        voucherCode: null,
-        username: user,
-        password: user,
-        planName: 'Online Pass',
-        durationSeconds: 3600,
-        remainingMs,
-        remainingSeconds: Math.floor(remainingMs / 1000),
-        remainingFormatted: this.formatRemaining(remainingMs),
-        expiresAt: session.expiresAt ? session.expiresAt.toISOString() : new Date(exp).toISOString(),
-        startedAt: session.startedAt ? session.startedAt.toISOString() : null,
-        reconnectUrl: `http://192.168.88.1/login?username=${encodeURIComponent(user)}&password=${encodeURIComponent(user)}`,
-      };
-    }
-
-    if (activeOrder) {
-      const exp = activeOrder.calculatedExpiry.getTime();
-      const remainingMs = Math.max(0, exp - now);
-      const user = normalized;
-      return {
-        hasActiveAccess: remainingMs > 0,
-        isConnectedOnRouter: !!rActive,
-        mac: normalized,
-        source: 'online',
-        voucherCode: null,
-        username: user,
-        password: user,
-        planName: activeOrder.plan?.name || 'Online Pass',
-        durationSeconds: activeOrder.plan?.durationSeconds || 3600,
-        remainingMs,
-        remainingSeconds: Math.floor(remainingMs / 1000),
-        remainingFormatted: this.formatRemaining(remainingMs),
-        expiresAt: activeOrder.calculatedExpiry.toISOString(),
-        startedAt: activeOrder.createdAt.toISOString(),
-        reconnectUrl: `http://192.168.88.1/login?username=${encodeURIComponent(user)}&password=${encodeURIComponent(user)}`,
-      };
-    }
-
-    return {
-      hasActiveAccess: false,
-      mac: normalized || null,
-      source: null,
-      voucherCode: null,
-      username: null,
-      password: null,
-      planName: null,
-      durationSeconds: 0,
-      remainingMs: 0,
-      remainingSeconds: 0,
-      remainingFormatted: '00:00:00',
-      expiresAt: null,
-      startedAt: null,
-      reconnectUrl: null,
-    };
-  }
 
   private formatRemaining(ms: number): string {
     if (ms <= 0) return '00:00:00';
@@ -681,6 +464,93 @@ export class PortalService {
       return `${hours}h ${minutes}m ${seconds}s`;
     }
     return `${minutes}m ${seconds}s`;
+  }
+
+  private profileForDuration(seconds: number, simultaneousDevices: number = 1): string {
+    if (simultaneousDevices === 2) return 'profile_duo';
+    if (simultaneousDevices > 2) return 'profile_family';
+
+    if (seconds <= 1800) return 'profile_30m';
+    if (seconds <= 3600) return 'profile_1h';
+    if (seconds <= 7200) return 'profile_2h';
+    if (seconds <= 10800) return 'profile_3h';
+    if (seconds <= 21600) return 'profile_6h';
+    if (seconds <= 43200) return 'profile_12h';
+    if (seconds <= 86400) return 'profile_1d';
+    if (seconds <= 604800) return 'profile_7d';
+    return 'profile_30d';
+  }
+
+  private formatDuration(seconds: number): string {
+    if (seconds >= 86400) return `${Math.floor(seconds / 86400)}d`;
+    if (seconds >= 3600) return `${Math.floor(seconds / 3600)}h`;
+    if (seconds >= 60) return `${Math.floor(seconds / 60)}m`;
+    return `${seconds}s`;
+  }
+
+  async generateRouterSyncScript(venueSlug?: string, venueId?: string, format?: string) {
+    const slug = venueSlug || 'flagship';
+    const venue = venueId
+      ? await this.prisma.venue.findUnique({ where: { id: venueId } })
+      : await this.prisma.venue.findFirst({ where: { slug } });
+
+    if (!venue) {
+      if (format === 'json') return { status: 'error', message: 'Venue not found', activeVouchers: [] };
+      return '# Error: Venue not found';
+    }
+
+    const now = new Date();
+    const vouchers = await this.prisma.voucher.findMany({
+      where: {
+        venueId: venue.id,
+        status: 'ACTIVE',
+        OR: [{ expiresAt: { gt: now } }, { expiresAt: null }],
+      },
+      include: { plan: true },
+      orderBy: { issuedAt: 'desc' },
+      take: 100,
+    });
+
+    if (format === 'json') {
+      return {
+        venue: venue.name,
+        slug: venue.slug,
+        count: vouchers.length,
+        vouchers: vouchers.map((v) => ({
+          code: v.displayCodeEnc || v.id.slice(0, 8),
+          mac: v.redeemedMac,
+          profile: v.plan?.rateLimit || this.profileForDuration(v.plan?.durationSeconds || 3600, v.plan?.simultaneousDevices),
+          durationSeconds: v.plan?.durationSeconds || 3600,
+          expiresAt: v.expiresAt,
+        })),
+      };
+    }
+
+    // Generate RouterOS Script (v6 & v7 compatible)
+    const commands: string[] = [
+      `# ========================================================`,
+      `# WavePass RouterOS Cloud Voucher Sync`,
+      `# Venue: ${venue.name} (${venue.slug})`,
+      `# Timestamp: ${now.toISOString()}`,
+      `# Total Active Cloud Vouchers: ${vouchers.length}`,
+      `# ========================================================`,
+      `:do {`,
+    ];
+
+    for (const v of vouchers) {
+      const code = v.displayCodeEnc || v.id.slice(0, 8);
+      const durSec = v.plan?.durationSeconds || 3600;
+      const durStr = this.formatDuration(durSec);
+      const prof = v.plan?.rateLimit || this.profileForDuration(durSec, v.plan?.simultaneousDevices);
+      const isSingle = (v.plan?.simultaneousDevices ?? 1) === 1;
+      const macParam = isSingle && v.redeemedMac ? ` mac-address="${v.redeemedMac.toUpperCase()}"` : '';
+      commands.push(
+        `  :if ([:len [/ip hotspot user find name="${code}"]] = 0) do={ /ip hotspot user add name="${code}" password="${code}" profile="${prof}" limit-uptime=${durStr}${macParam} comment="WavePass Cloud Sync" }`,
+      );
+    }
+
+    commands.push(`} on-error={ :log warning "WavePass cloud voucher sync partial error" }`);
+    return commands.join('\n');
   }
 }
 

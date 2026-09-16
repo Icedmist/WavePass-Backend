@@ -89,7 +89,7 @@ export class VenuesService {
         slug,
         timezone: dto.timezone || 'Africa/Lagos',
         currency: dto.currency || 'NGN',
-        logoUrl: dto.logoUrl,
+        logoUrl: dto.logoUrl?.trim() || 'https://nexawavepass.com/logo.png',
       },
     });
   }

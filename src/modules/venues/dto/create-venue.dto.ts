@@ -17,7 +17,7 @@ export class CreateVenueDto {
   @IsString()
   currency?: string;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty({ message: 'logoUrl is required — upload venue logo during onboarding' })
-  logoUrl: string;
+  logoUrl?: string;
 }

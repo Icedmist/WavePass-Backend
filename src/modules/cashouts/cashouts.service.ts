@@ -125,9 +125,9 @@ export class CashoutsService {
     }
   }
 
-  /** Accumulated, usable venue balance = fulfilled payments minus pending/paid cashouts. */
+  /** Accumulated, usable venue balance = fulfilled payments minus pending/completed cashouts. */
   async venueBalance(venueId: string) {
-    const [fulfilled, cashouts] = await Promise.all([
+    const [fulfilled, pendingCashouts, completedCashouts] = await Promise.all([
       this.prisma.payment.aggregate({
         where: {
           status: 'FULFILLED',
@@ -139,17 +139,27 @@ export class CashoutsService {
         where: { venueId, status: { in: ['PENDING', 'APPROVED', 'CONFIRMED', 'PROCESSING'] } },
         select: { amountMinor: true },
       }),
+      this.prisma.cashout.findMany({
+        where: { venueId, status: 'COMPLETED' },
+        select: { amountMinor: true },
+      }),
     ]);
 
     const earned = fulfilled._sum.amountMinor || 0;
-    const locked = cashouts.reduce((acc, c) => acc + c.amountMinor, 0);
+    const locked = pendingCashouts.reduce((acc, c) => acc + c.amountMinor, 0);
+    const cashedOut = completedCashouts.reduce((acc, c) => acc + c.amountMinor, 0);
+    const availableMinor = Math.max(0, earned - locked - cashedOut);
 
     return {
       venueId,
       earnedMinor: earned,
       lockedMinor: locked,
-      availableMinor: Math.max(0, earned - locked),
-      availableNGN: Math.round(Math.max(0, earned - locked) / 100),
+      cashedOutMinor: cashedOut,
+      availableMinor,
+      availableNGN: Math.round(availableMinor / 100),
+      pendingNGN: Math.round(locked / 100),
+      totalEarnedNGN: Math.round(earned / 100),
+      cashedOutNGN: Math.round(cashedOut / 100),
     };
   }
 
