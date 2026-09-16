@@ -26,6 +26,13 @@ export class PaystackController {
   async initialize(@Body() body: { orderId: string; email: string }) {
     const order = await this.prisma.order.findUniqueOrThrow({ where: { id: body.orderId } });
 
+    // Already paid: hand back the fulfilled reference instead of opening a
+    // second Paystack transaction that would strand with no local row.
+    const existing = await this.prisma.payment.findUnique({ where: { orderId: order.id } });
+    if (existing && existing.status === 'FULFILLED') {
+      return { authorizationUrl: null, reference: existing.providerReference, alreadyFulfilled: true };
+    }
+
     const reference = `wp_${order.id}_${Date.now()}`;
     const init = await this.paystack.initializeTransaction({
       amountMinor: order.amountMinor, // locked server-side amount — never trust the client
@@ -36,13 +43,12 @@ export class PaystackController {
 
     // Idempotent re-init: a second initialize for the same order refreshes the
     // PENDING payment row instead of crashing on the unique orderId (P2002).
-    const existing = await this.prisma.payment.findUnique({ where: { orderId: order.id } });
-    if (existing && existing.status !== 'FULFILLED') {
+    if (existing) {
       await this.prisma.payment.update({
         where: { id: existing.id },
         data: { providerReference: reference, amountMinor: order.amountMinor, status: 'PENDING' },
       });
-    } else if (!existing) {
+    } else {
       await this.prisma.payment.create({
         data: {
           orderId: order.id,

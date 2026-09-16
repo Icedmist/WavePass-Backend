@@ -79,8 +79,7 @@ describe('Paystack webhook controller idempotency', () => {
     expect(queue.enqueue).toHaveBeenCalledWith({ reference: 'wp_9' });
   });
 
-  it('acks duplicate without re-enqueue when payment already fulfilled', async () => {
-    const prisma: any = {
+  it('acks duplicate without re-enqueue when payment already fulfilled', async () => {    const prisma: any = {
       webhookEvent: {
         findUnique: vi.fn(async () => ({ eventKey: 'charge.success:wp_8:6', status: 'queued' })),
         update: vi.fn(async () => ({})),
@@ -100,5 +99,20 @@ describe('Paystack webhook controller idempotency', () => {
     const res = await controller.webhook(sig, { rawBody: raw } as any, body);
     expect(res).toMatchObject({ received: true, duplicate: true });
     expect(queue.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('returns existing reference without new Paystack transaction when already fulfilled', async () => {
+    const prisma: any = {
+      order: { findUniqueOrThrow: vi.fn(async () => ({ id: 'ord-1', amountMinor: 50000 })) },
+      payment: {
+        findUnique: vi.fn(async () => ({ id: 'pay-1', status: 'FULFILLED', providerReference: 'wp_old_ref' })),
+      },
+    };
+    const paystack: any = { initializeTransaction: vi.fn(async () => { throw new Error('should not be called'); }) };
+    const controller = new PaystackController(paystack, prisma, { enqueue: vi.fn() } as any);
+
+    const res = await controller.initialize({ orderId: 'ord-1', email: 'a@b.c' });
+    expect(res).toMatchObject({ reference: 'wp_old_ref', alreadyFulfilled: true });
+    expect(paystack.initializeTransaction).not.toHaveBeenCalled();
   });
 });
