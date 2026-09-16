@@ -104,4 +104,10 @@
   - Documented health checks (`/api/v1/health` and `/api/v1/health/ready`).
 - [x] **Verification**: Verified on production droplet; API healthy and connected to local Redis; 0 Redis request errors; memory usage 51.8MB (API) and 3.5MB (Redis).
 
+### 15. Paystack Fulfilment Recovery & Idempotent Initialize (Issue #30, PR #31)
+- [x] **Duplicate Webhook Re-enqueue**: `charge.success` retries now re-enqueue `payment-fulfilment` when the local payment is still pending (covers Redis-outage first delivery); already-fulfilled duplicates ACK without re-enqueue. Event marked `requeued`.
+- [x] **Idempotent Initialize**: re-initializing payment for the same order refreshes the PENDING row instead of crashing on unique `orderId` (P2002).
+- [x] **Verification**: `tsc` clean; 32/32 vitest pass including new controller-level duplicate/re-enqueue tests.
+- [x] PR [#31](https://github.com/Icedmist/WavePass-Backend/pull/31) merged to `main`.
+
 
