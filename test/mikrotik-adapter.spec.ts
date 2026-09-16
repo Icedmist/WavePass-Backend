@@ -91,4 +91,61 @@ describe('MikrotikAdapter', () => {
       expect(res).toEqual(payload);
     });
   });
+
+  describe('createHotspotUser with MAC binding and shared users', () => {
+    it('includes mac-address and shared-users in RouterOS payload', async () => {
+      const fetchSpy = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 201,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({ '.id': '*1' }),
+      });
+      vi.stubGlobal('fetch', fetchSpy);
+
+      await adapter.createHotspotUser(
+        'http://192.168.88.1',
+        { username: 'admin', password: 'secretpassword' },
+        {
+          username: 'user1',
+          password: 'pass1',
+          profile: 'profile_1h',
+          sessionTimeoutSeconds: 3600,
+          sharedUsers: 1,
+          macAddress: 'AA:BB:CC:DD:EE:FF',
+        },
+      );
+
+      expect(fetchSpy).toHaveBeenCalled();
+      const callArgs = fetchSpy.mock.calls[0];
+      const parsedBody = JSON.parse(callArgs[1].body);
+      expect(parsedBody['mac-address']).toBe('AA:BB:CC:DD:EE:FF');
+      expect(parsedBody['shared-users']).toBe('1');
+    });
+  });
+
+  describe('bindUserToMac', () => {
+    it('sends PATCH with uppercase MAC address', async () => {
+      const fetchSpy = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({}),
+      });
+      vi.stubGlobal('fetch', fetchSpy);
+
+      await adapter.bindUserToMac(
+        'http://192.168.88.1',
+        { username: 'admin', password: 'secretpassword' },
+        'WP-TEST',
+        'aa:bb:cc:dd:ee:ff',
+      );
+
+      expect(fetchSpy).toHaveBeenCalled();
+      const callArgs = fetchSpy.mock.calls[0];
+      expect(callArgs[0]).toBe('http://192.168.88.1/rest/ip/hotspot/user/WP-TEST');
+      expect(callArgs[1].method).toBe('PATCH');
+      const parsedBody = JSON.parse(callArgs[1].body);
+      expect(parsedBody['mac-address']).toBe('AA:BB:CC:DD:EE:FF');
+    });
+  });
 });

@@ -108,4 +108,68 @@ describe('MikrotikProvisioningProcessor', () => {
     expect(call[2].password).toBe('WP-TEST-1234');
     expect(prisma.$transaction).toHaveBeenCalled();
   });
+
+  it('binds MAC address for single-device voucher when redeemedMac is present', async () => {
+    const prisma = mockPrisma();
+    const adapter = mockAdapter();
+    const proc = new MikrotikProvisioningProcessor(prisma, adapter);
+
+    prisma.voucher.findUniqueOrThrow.mockResolvedValue({
+      id: 'v-mac-1',
+      displayCodeEnc: 'WP-MAC-1234',
+      redeemedMac: '11:22:33:44:55:66',
+      venueId: 'venue-1',
+      plan: { durationSeconds: 3600, dataLimitBytes: null, simultaneousDevices: 1, rateLimit: null },
+      venue: { id: 'venue-1', routers: [{ id: 'r1', endpoint: 'http://10.0.0.1', venueId: 'venue-1' }] },
+    });
+
+    await (proc as any).provisionForVoucher('v-mac-1');
+    expect(adapter.createHotspotUser).toHaveBeenCalledTimes(1);
+    const call = adapter.createHotspotUser.mock.calls[0];
+    expect(call[2].macAddress).toBe('11:22:33:44:55:66');
+    expect(call[2].sharedUsers).toBe(1);
+  });
+
+  it('does not bind MAC address and selects profile_duo for multi-device plan (simultaneousDevices = 2)', async () => {
+    const prisma = mockPrisma();
+    const adapter = mockAdapter();
+    const proc = new MikrotikProvisioningProcessor(prisma, adapter);
+
+    prisma.order.findUniqueOrThrow.mockResolvedValue({
+      id: 'order-duo',
+      venueId: 'venue-1',
+      customerRef: 'AA:BB:CC:DD:EE:FF',
+      plan: { durationSeconds: 86400, dataLimitBytes: null, simultaneousDevices: 2, rateLimit: null },
+      venue: { id: 'venue-1', routers: [{ id: 'r1', endpoint: 'http://10.0.0.1', venueId: 'venue-1' }] },
+    });
+
+    await (proc as any).provisionForOrder('order-duo');
+    expect(adapter.createHotspotUser).toHaveBeenCalledTimes(1);
+    const call = adapter.createHotspotUser.mock.calls[0];
+    expect(call[2].macAddress).toBeUndefined();
+    expect(call[2].profile).toBe('profile_duo');
+    expect(call[2].sharedUsers).toBe(2);
+  });
+
+  it('does not bind MAC address and selects profile_family for multi-device plan (simultaneousDevices = 5)', async () => {
+    const prisma = mockPrisma();
+    const adapter = mockAdapter();
+    const proc = new MikrotikProvisioningProcessor(prisma, adapter);
+
+    prisma.voucher.findUniqueOrThrow.mockResolvedValue({
+      id: 'v-family',
+      displayCodeEnc: 'WP-FAM-5555',
+      redeemedMac: '11:22:33:44:55:66',
+      venueId: 'venue-1',
+      plan: { durationSeconds: 86400, dataLimitBytes: null, simultaneousDevices: 5, rateLimit: null },
+      venue: { id: 'venue-1', routers: [{ id: 'r1', endpoint: 'http://10.0.0.1', venueId: 'venue-1' }] },
+    });
+
+    await (proc as any).provisionForVoucher('v-family');
+    expect(adapter.createHotspotUser).toHaveBeenCalledTimes(1);
+    const call = adapter.createHotspotUser.mock.calls[0];
+    expect(call[2].macAddress).toBeUndefined();
+    expect(call[2].profile).toBe('profile_family');
+    expect(call[2].sharedUsers).toBe(5);
+  });
 });

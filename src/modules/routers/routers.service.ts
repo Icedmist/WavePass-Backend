@@ -225,12 +225,17 @@ export class RoutersService {
 /ip hotspot walled-garden add dst-host="*.nexawavepass.com" action=allow comment="WavePass Venues"
 /ip hotspot walled-garden add dst-host="api.nexawavepass.com" action=allow comment="WavePass API"
 
-# 4. Standard Plan User Profiles with Rate Limiting (Mikhmon Parity)
+# 4. Standard & Multi-Device User Profiles with Rate Limiting (Mikhmon Parity)
 /ip hotspot user profile add name="profile_1h" session-timeout=1h keepalive-timeout=2m shared-users=1 status-autorefresh=1m rate-limit="10M/5M" comment="WavePass 1-Hour Tier"
 /ip hotspot user profile add name="profile_12h" session-timeout=12h keepalive-timeout=2m shared-users=1 status-autorefresh=1m rate-limit="15M/5M" comment="WavePass 12-Hour Tier"
 /ip hotspot user profile add name="profile_1d" session-timeout=1d keepalive-timeout=2m shared-users=1 status-autorefresh=1m rate-limit="20M/10M" comment="WavePass 24-Hour Tier"
+/ip hotspot user profile add name="profile_duo" session-timeout=1d keepalive-timeout=2m shared-users=2 status-autorefresh=1m rate-limit="15M/5M" comment="WavePass Duo Tier (2 Devices)"
+/ip hotspot user profile add name="profile_family" session-timeout=1d keepalive-timeout=2m shared-users=5 status-autorefresh=1m rate-limit="25M/10M" comment="WavePass Family Tier (5 Devices)"
 
-# 5. Low-RAM Memory Auto-Cleanup Script & Scheduler (Mikhmon Parity)
+# 5. Anti-Tethering Firewall Mangle Rule (Blocks Phone Hotspot Forwarding)
+/ip firewall mangle add chain=postrouting action=change-ttl new-ttl=set:1 out-interface=bridge1 comment="WavePass: Anti-Tethering"
+
+# 6. Low-RAM Memory Auto-Cleanup Script & Scheduler (Mikhmon Parity)
 :if ([:len [/system/script find name="wavepass-cleanup"]] = 0) do={
   /system script add name="wavepass-cleanup" source={/ip hotspot user remove [find comment="expired"]} comment="WavePass expired user purge"
 }

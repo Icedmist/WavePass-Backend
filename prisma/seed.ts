@@ -60,12 +60,34 @@ async function main() {
     {
       id: 'plan_24hr',
       name: '24 Hour Unlimited',
-      description: 'Full 24-hour non-stop Wi-Fi access pass',
+      description: 'Full 24-hour non-stop Wi-Fi access pass (Single Device)',
       priceMinor: 150000, // 1500 NGN
       durationSeconds: 86400,
-      rateLimit: 'profile_24h',
+      rateLimit: 'profile_1d',
       mode: PlanMode.ELAPSED,
       simultaneousDevices: 1,
+      active: true,
+    },
+    {
+      id: 'plan_duo_24hr',
+      name: '24 Hour Duo Pass',
+      description: 'Shareable Wi-Fi pass for up to 2 devices simultaneously',
+      priceMinor: 250000, // 2500 NGN
+      durationSeconds: 86400,
+      rateLimit: 'profile_duo',
+      mode: PlanMode.ELAPSED,
+      simultaneousDevices: 2,
+      active: true,
+    },
+    {
+      id: 'plan_family_24hr',
+      name: '24 Hour Family Pass',
+      description: 'High-speed shared Wi-Fi for up to 5 devices simultaneously',
+      priceMinor: 500000, // 5000 NGN
+      durationSeconds: 86400,
+      rateLimit: 'profile_family',
+      mode: PlanMode.ELAPSED,
+      simultaneousDevices: 5,
       active: true,
     },
   ];
@@ -77,6 +99,7 @@ async function main() {
         priceMinor: plan.priceMinor,
         durationSeconds: plan.durationSeconds,
         rateLimit: plan.rateLimit,
+        simultaneousDevices: plan.simultaneousDevices,
         active: plan.active,
       },
       create: {
@@ -84,7 +107,7 @@ async function main() {
         venueId: venue.id,
       },
     });
-    console.log(`Plan: ${created.name} — ₦${created.priceMinor / 100} (${created.rateLimit})`);
+    console.log(`Plan: ${created.name} — ₦${created.priceMinor / 100} (${created.rateLimit}, ${created.simultaneousDevices} device${created.simultaneousDevices > 1 ? 's' : ''})`);
   }
 
   console.log('Seeding finished successfully.');
