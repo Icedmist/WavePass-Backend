@@ -25,6 +25,40 @@ export class AdminAuthService {
     return a.length === b.length && timingSafeEqual(a, b);
   }
 
+  async verifyUserOrAdminPassword(password: string, email?: string): Promise<{ ok: boolean; supabaseUserId?: string }> {
+    // 1. Check platform admin credentials
+    if (this.verifyPassword(password, email)) {
+      return { ok: true };
+    }
+
+    // 2. Check Supabase Auth credentials for user account
+    if (!email || !password) return { ok: false };
+    const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseKey =
+      process.env.SUPABASE_SERVICE_ROLE_KEY ||
+      process.env.SUPABASE_SECRET_KEY ||
+      process.env.SUPABASE_PUBLISHABLE_KEY ||
+      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+    if (!supabaseUrl || !supabaseKey) return { ok: false };
+
+    try {
+      const res = await fetch(`${supabaseUrl.replace(/\/$/, '')}/auth/v1/token?grant_type=password`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': supabaseKey,
+        },
+        body: JSON.stringify({ email: email.toLowerCase().trim(), password }),
+      });
+      if (res.ok) {
+        const data: any = await res.json().catch(() => ({}));
+        const userId = data.user?.id;
+        return { ok: true, supabaseUserId: userId };
+      }
+    } catch (_) {}
+    return { ok: false };
+  }
+
   changePassword(currentPassword: string, newPassword: string, email?: string): boolean {
     if (!this.verifyPassword(currentPassword, email)) return false;
     this.runtimePasswordHash = createHash('sha256').update(newPassword).digest('hex');
