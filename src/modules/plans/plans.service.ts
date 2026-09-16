@@ -32,9 +32,43 @@ export class PlansService {
   }
 
   async getPlanById(id: string) {
-    const plan = await this.prisma.plan.findUnique({ where: { id } });
-    if (!plan) throw new NotFoundException(`Plan with id ${id} not found`);
-    return this.formatPlan(plan);
+    // 1. Direct find
+    let plan = await this.prisma.plan.findUnique({ where: { id } });
+    if (plan) return this.formatPlan(plan);
+
+    // 2. Common alias mapping (e.g. plan_1h -> plan_1hr, plan_24h -> plan_24hr)
+    const aliasMap: Record<string, string> = {
+      plan_1h: 'plan_1hr',
+      plan_12h: 'plan_12hr',
+      plan_24h: 'plan_24hr',
+      plan_1d: 'plan_24hr',
+      plan_7d: 'plan_7d',
+    };
+    if (aliasMap[id]) {
+      plan = await this.prisma.plan.findUnique({ where: { id: aliasMap[id] } });
+      if (plan) return this.formatPlan(plan);
+    }
+
+    // 3. Match by name or partial ID
+    plan = await this.prisma.plan.findFirst({
+      where: {
+        OR: [
+          { id: { contains: id, mode: 'insensitive' } },
+          { name: { contains: id, mode: 'insensitive' } },
+        ],
+        active: true,
+      },
+    });
+    if (plan) return this.formatPlan(plan);
+
+    // 4. Fallback to first active plan
+    plan = await this.prisma.plan.findFirst({
+      where: { active: true },
+      orderBy: { priceMinor: 'asc' },
+    });
+    if (plan) return this.formatPlan(plan);
+
+    throw new NotFoundException(`Plan with id ${id} not found`);
   }
 
   async createPlan(dto: CreatePlanDto) {

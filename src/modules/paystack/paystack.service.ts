@@ -43,10 +43,12 @@ export class PaystackService {
       }),
     });
 
-    if (!res.ok) {
-      throw new InternalServerErrorException('Paystack initialize failed');
+    const data: any = await res.json().catch(() => null);
+    if (!res.ok || (data && data.status === false)) {
+      const errMsg = data?.message || `Paystack initialize failed (HTTP ${res.status})`;
+      throw new InternalServerErrorException(errMsg);
     }
-    return res.json();
+    return data;
   }
 
   /** Server-to-server verification — never trust the client-supplied status. */

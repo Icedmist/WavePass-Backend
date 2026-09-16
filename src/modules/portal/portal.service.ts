@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma.service';
 import { PaystackService } from '../paystack/paystack.service';
 import { MikrotikProvisioningQueue } from '../mikrotik/mikrotik-provisioning.queue';
@@ -8,6 +8,7 @@ import { VenuesService } from '../venues/venues.service';
 
 @Injectable()
 export class PortalService {
+  private readonly logger = new Logger(PortalService.name);
   private readonly frontendUrl = process.env.FRONTEND_URL || 'https://nexawavepass.com';
   private readonly paystackSecret = process.env.PAYSTACK_SECRET_KEY || '';
 
@@ -41,7 +42,9 @@ export class PortalService {
     const venueId = dto.venueId || plan.venueId;
     const amount = plan.priceMinor;
     const reference = `wp_hs_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const customerEmail = dto.email || `hotspot_${mac.replace(/[:-]/g, '')}@wavepass.local`;
+    const customerEmail = dto.email && dto.email.includes('@') && !dto.email.endsWith('.local')
+      ? dto.email
+      : `guest_${mac.replace(/[:-]/g, '').toLowerCase()}@nexawavepass.com`;
 
     // 2. Create Order in database
     const order = await this.prisma.order.create({
@@ -231,33 +234,64 @@ export class PortalService {
     }
 
     // Try to enrich with live router data (bytes, IP) if session exists
+    // Try to enrich with live router data (bytes, IP, live session-time-left) if router exists
     let live: any = null;
     let dataUsedBytes = 0;
     let dataLimitBytes: number | null = null;
     let deviceIp = ip || session?.ip || null;
-    if (session?.router?.endpoint) {
+    let isConnectedOnRouter = false;
+    let routerRemainingMs: number | null = null;
+
+    let targetRouter = session?.router;
+    if (!targetRouter && normalized) {
+      targetRouter = await this.prisma.router.findFirst({
+        where: { status: 'ONLINE' },
+        orderBy: { lastSeen: 'desc' },
+      });
+    }
+
+    if (targetRouter?.endpoint) {
       try {
         const { MikrotikAdapter } = await import('../mikrotik/mikrotik.adapter');
         const adapter = new MikrotikAdapter();
-        const rows = await adapter.getActiveHotspotData(session.router.endpoint, {
-          username: process.env.MIKROTIK_API_USER || 'wavepass',
+        const creds = {
+          username: process.env.MIKROTIK_API_USER || 'admin',
           password: process.env.MIKROTIK_API_PASS || '',
-        });
-        live = rows.find((r: any) => String(r['mac-address'] || r.mac || '').toUpperCase() === normalized || String(r.user || '').toUpperCase() === normalized);
+        };
+        const rows = await adapter.getActiveHotspotData(targetRouter.endpoint, creds);
+        live = rows.find((r: any) =>
+          String(r['mac-address'] || r.mac || '').toUpperCase() === normalized ||
+          String(r.user || '').toUpperCase() === normalized
+        );
         if (live) {
+          isConnectedOnRouter = true;
           deviceIp = live.address || live.ip || deviceIp;
           dataUsedBytes = Number(live['bytes-in'] || 0) + Number(live['bytes-out'] || 0);
+          if (live['session-time-left']) {
+            const parsedSec = adapter.parseRouterOsDuration(live['session-time-left']);
+            if (parsedSec > 0) routerRemainingMs = parsedSec * 1000;
+          }
+        }
+
+        const rUser = await adapter.getHotspotUserData(targetRouter.endpoint, creds, normalized);
+        if (rUser) {
+          const limitSec = adapter.parseRouterOsDuration(rUser['limit-uptime']);
+          const uptimeSec = adapter.parseRouterOsDuration(rUser.uptime);
+          if (limitSec > 0 && routerRemainingMs === null) {
+            routerRemainingMs = Math.max(0, limitSec - uptimeSec) * 1000;
+          }
         }
       } catch {}
       const planLimit = (session as any)?.voucher?.plan?.dataLimitBytes ?? null;
       dataLimitBytes = planLimit ? Number(planLimit) : null;
     }
 
-    if (!session) {
+    if (!session && !live) {
       const venue = await this.venuesService.getDefaultVenue();
       const plans = await this.plansService.listPlans(venue.id);
       return {
         hasPaid: false,
+        isConnectedOnRouter: false,
         walledGardenOpen: true,
         mac: normalized || null,
         ip: deviceIp,
@@ -278,33 +312,35 @@ export class PortalService {
     }
 
     const now = Date.now();
-    const expiresAt = session.expiresAt ? session.expiresAt.getTime() : now;
-    const remainingMs = Math.max(0, expiresAt - now);
+    const expiresAt = session?.expiresAt ? session.expiresAt.getTime() : now;
+    const calcRemainingMs = Math.max(0, expiresAt - now);
+    const remainingMs = routerRemainingMs !== null ? routerRemainingMs : calcRemainingMs;
     const hasPaid = remainingMs > 0;
     const pct = dataLimitBytes ? Math.min(100, Math.round((dataUsedBytes / dataLimitBytes) * 100)) : 0;
-    const code = session.voucher?.displayCodeEnc || session.voucher?.id || null;
+    const code = session?.voucher?.displayCodeEnc || session?.voucher?.id || live?.user || null;
     const credUser = code || normalized;
 
     return {
       hasPaid,
+      isConnectedOnRouter,
       walledGardenOpen: true,
       mac: normalized,
       ip: deviceIp,
-      sessionId: session.id,
+      sessionId: session?.id || `live_${normalized}`,
       voucherCode: code,
       username: credUser,
       password: credUser,
-      planName: session.voucher?.plan?.name || 'Internet Pass',
+      planName: session?.voucher?.plan?.name || 'Internet Pass',
       remainingMs,
-      expiresAt: session.expiresAt,
-      startedAt: session.startedAt,
+      expiresAt: session?.expiresAt || new Date(now + remainingMs),
+      startedAt: session?.startedAt || new Date(),
       dataUsedBytes,
       dataLimitBytes,
       dataExhaustedPct: pct,
       dataExhausted: pct >= 100,
       paymentMethods: ['card', 'transfer', 'voucher'],
       voucherAccess: true,
-      router: session.router,
+      router: session?.router || targetRouter,
       reconnectUrl: `http://192.168.88.1/login?username=${encodeURIComponent(credUser)}&password=${encodeURIComponent(credUser)}`,
     };
   }
@@ -341,7 +377,86 @@ export class PortalService {
 
     const now = Date.now();
 
-    // 1. Check for active Session in database
+    // 1. Probe MikroTik router directly for live user & active session
+    let targetRouter = await this.prisma.router.findFirst({
+      where: { status: 'ONLINE' },
+      orderBy: { lastSeen: 'desc' },
+    });
+
+    let rActive: any = null;
+    let rUser: any = null;
+    let routerRemainingMs: number | null = null;
+    let mikrotikAdapter: any = null;
+    const mikrotikCreds = {
+      username: process.env.MIKROTIK_API_USER || 'admin',
+      password: process.env.MIKROTIK_API_PASS || '',
+    };
+
+    if (targetRouter?.endpoint) {
+      try {
+        const { MikrotikAdapter } = await import('../mikrotik/mikrotik.adapter');
+        mikrotikAdapter = new MikrotikAdapter();
+
+        const rows = await mikrotikAdapter.getActiveHotspotData(targetRouter.endpoint, mikrotikCreds);
+        rActive = rows.find((r: any) =>
+          (normalized && String(r['mac-address'] || r.mac || '').toUpperCase() === normalized) ||
+          (normalized && String(r.user || '').toUpperCase() === normalized) ||
+          (ip && String(r.address || r.ip || '') === ip)
+        );
+
+        if (rActive) {
+          if (rActive['session-time-left']) {
+            const parsed = mikrotikAdapter.parseRouterOsDuration(rActive['session-time-left']);
+            if (parsed > 0) routerRemainingMs = parsed * 1000;
+          }
+          if (rActive.user) {
+            rUser = await mikrotikAdapter.getHotspotUserData(targetRouter.endpoint, mikrotikCreds, rActive.user);
+          }
+        }
+
+        if (!rUser && normalized) {
+          rUser = await mikrotikAdapter.getHotspotUserData(targetRouter.endpoint, mikrotikCreds, normalized);
+        }
+
+        if (rUser) {
+          const limitSec = mikrotikAdapter.parseRouterOsDuration(rUser['limit-uptime']);
+          const uptimeSec = mikrotikAdapter.parseRouterOsDuration(rUser.uptime);
+          if (limitSec > 0 && routerRemainingMs === null) {
+            routerRemainingMs = Math.max(0, limitSec - uptimeSec) * 1000;
+          }
+        }
+      } catch (err) {
+        this.logger.warn(`Failed to inspect MikroTik router for client ${normalized}: ${(err as Error).message}`);
+      }
+    }
+
+    // If active user or session is confirmed directly on MikroTik router
+    if (rUser || rActive) {
+      const remainingMs = routerRemainingMs !== null ? routerRemainingMs : 3600000;
+      if (remainingMs > 0) {
+        const u = rUser?.name || rActive?.user || normalized;
+        const p = rUser?.password || u;
+        return {
+          hasActiveAccess: true,
+          isConnectedOnRouter: !!rActive,
+          mac: normalized || rActive?.['mac-address'] || rUser?.['mac-address'],
+          source: 'mikrotik',
+          voucherCode: u,
+          username: u,
+          password: p,
+          planName: rUser?.profile || 'MikroTik HotSpot Pass',
+          durationSeconds: Math.floor(remainingMs / 1000),
+          remainingMs,
+          remainingSeconds: Math.floor(remainingMs / 1000),
+          remainingFormatted: this.formatRemaining(remainingMs),
+          expiresAt: new Date(now + remainingMs).toISOString(),
+          startedAt: null,
+          reconnectUrl: `http://192.168.88.1/login?username=${encodeURIComponent(u)}&password=${encodeURIComponent(p)}`,
+        };
+      }
+    }
+
+    // 2. Check for active Session in database
     let session: any = null;
     if (normalized) {
       session = await this.prisma.session.findFirst({
@@ -373,7 +488,7 @@ export class PortalService {
       });
     }
 
-    // 2. Check for active redeemed Voucher tied to this MAC
+    // 3. Check for active redeemed Voucher tied to this MAC
     let activeVoucher: any = null;
     if (normalized) {
       const redeemedVouchers = await this.prisma.voucher.findMany({
@@ -396,7 +511,7 @@ export class PortalService {
       }
     }
 
-    // 3. Check for active Paystack online order tied to this MAC
+    // 4. Check for active Paystack online order tied to this MAC
     let activeOrder: any = null;
     if (normalized) {
       const orders = await this.prisma.order.findMany({
@@ -419,13 +534,27 @@ export class PortalService {
       }
     }
 
-    // Prioritize voucher session if available
+    // Prioritize voucher session if available - query router for live remaining time
     if (session && session.voucher) {
-      const exp = session.expiresAt ? session.expiresAt.getTime() : (now + 3600000);
-      const remainingMs = Math.max(0, exp - now);
       const code = session.voucher.displayCodeEnc || session.voucher.id;
+      let remainingMs = session.expiresAt ? Math.max(0, session.expiresAt.getTime() - now) : 3600000;
+
+      if (targetRouter?.endpoint && mikrotikAdapter && code) {
+        try {
+          const rVch = await mikrotikAdapter.getHotspotUserData(targetRouter.endpoint, mikrotikCreds, code);
+          if (rVch) {
+            const limitSec = mikrotikAdapter.parseRouterOsDuration(rVch['limit-uptime']);
+            const uptimeSec = mikrotikAdapter.parseRouterOsDuration(rVch.uptime);
+            if (limitSec > 0) {
+              remainingMs = Math.max(0, limitSec - uptimeSec) * 1000;
+            }
+          }
+        } catch {}
+      }
+
       return {
         hasActiveAccess: remainingMs > 0,
+        isConnectedOnRouter: !!rActive,
         mac: normalized || session.mac,
         source: 'voucher',
         voucherCode: code,
@@ -436,18 +565,32 @@ export class PortalService {
         remainingMs,
         remainingSeconds: Math.floor(remainingMs / 1000),
         remainingFormatted: this.formatRemaining(remainingMs),
-        expiresAt: session.expiresAt ? session.expiresAt.toISOString() : new Date(exp).toISOString(),
+        expiresAt: new Date(now + remainingMs).toISOString(),
         startedAt: session.startedAt ? session.startedAt.toISOString() : null,
         reconnectUrl: `http://192.168.88.1/login?username=${encodeURIComponent(code)}&password=${encodeURIComponent(code)}`,
       };
     }
 
     if (activeVoucher) {
-      const exp = activeVoucher.calculatedExpiry.getTime();
-      const remainingMs = Math.max(0, exp - now);
       const code = activeVoucher.displayCodeEnc || activeVoucher.id;
+      let remainingMs = Math.max(0, activeVoucher.calculatedExpiry.getTime() - now);
+
+      if (targetRouter?.endpoint && mikrotikAdapter && code) {
+        try {
+          const rVch = await mikrotikAdapter.getHotspotUserData(targetRouter.endpoint, mikrotikCreds, code);
+          if (rVch) {
+            const limitSec = mikrotikAdapter.parseRouterOsDuration(rVch['limit-uptime']);
+            const uptimeSec = mikrotikAdapter.parseRouterOsDuration(rVch.uptime);
+            if (limitSec > 0) {
+              remainingMs = Math.max(0, limitSec - uptimeSec) * 1000;
+            }
+          }
+        } catch {}
+      }
+
       return {
         hasActiveAccess: remainingMs > 0,
+        isConnectedOnRouter: !!rActive,
         mac: normalized,
         source: 'voucher',
         voucherCode: code,
@@ -458,18 +601,19 @@ export class PortalService {
         remainingMs,
         remainingSeconds: Math.floor(remainingMs / 1000),
         remainingFormatted: this.formatRemaining(remainingMs),
-        expiresAt: activeVoucher.calculatedExpiry.toISOString(),
+        expiresAt: new Date(now + remainingMs).toISOString(),
         startedAt: activeVoucher.redeemedAt ? activeVoucher.redeemedAt.toISOString() : null,
         reconnectUrl: `http://192.168.88.1/login?username=${encodeURIComponent(code)}&password=${encodeURIComponent(code)}`,
       };
     }
 
     if (session && !session.voucher) {
+      const user = session.mac || normalized;
       const exp = session.expiresAt ? session.expiresAt.getTime() : (now + 3600000);
       const remainingMs = Math.max(0, exp - now);
-      const user = session.mac || normalized;
       return {
         hasActiveAccess: remainingMs > 0,
+        isConnectedOnRouter: !!rActive,
         mac: normalized || session.mac,
         source: 'online',
         voucherCode: null,
@@ -492,6 +636,7 @@ export class PortalService {
       const user = normalized;
       return {
         hasActiveAccess: remainingMs > 0,
+        isConnectedOnRouter: !!rActive,
         mac: normalized,
         source: 'online',
         voucherCode: null,

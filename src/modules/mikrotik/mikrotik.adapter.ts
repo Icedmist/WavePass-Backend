@@ -144,6 +144,28 @@ export class MikrotikAdapter {
     }
   }
 
+  parseRouterOsDuration(uptimeStr?: string): number {
+    if (!uptimeStr) return 0;
+    let totalSec = 0;
+    const s = uptimeStr.trim().toLowerCase();
+    const weeks = s.match(/(\d+)w/);
+    const days = s.match(/(\d+)d/);
+    const hours = s.match(/(\d+)h/);
+    const mins = s.match(/(\d+)m(?!s)/);
+    const secs = s.match(/(\d+)s/);
+    if (weeks) totalSec += parseInt(weeks[1], 10) * 604800;
+    if (days) totalSec += parseInt(days[1], 10) * 86400;
+    if (hours) totalSec += parseInt(hours[1], 10) * 3600;
+    if (mins) totalSec += parseInt(mins[1], 10) * 60;
+    if (secs) totalSec += parseInt(secs[1], 10);
+    if (!weeks && !days && !hours && !mins && !secs && s.includes(':')) {
+      const parts = s.split(':').map((p) => parseInt(p, 10) || 0);
+      if (parts.length === 3) totalSec = parts[0] * 3600 + parts[1] * 60 + parts[2];
+      else if (parts.length === 2) totalSec = parts[0] * 60 + parts[1];
+    }
+    return totalSec;
+  }
+
   async getActiveHotspotData(endpoint: string, credentials: { username: string; password: string }) {
     try {
       const res = await fetch(`${endpoint}/rest/ip/hotspot/active`, {
@@ -154,6 +176,26 @@ export class MikrotikAdapter {
       return (await res.json()) as any[];
     } catch {
       return [];
+    }
+  }
+
+  async getHotspotUserData(endpoint: string, credentials: { username: string; password: string }, userOrMac: string) {
+    try {
+      const res = await fetch(`${endpoint}/rest/ip/hotspot/user`, {
+        headers: { Authorization: this.basicAuth(credentials.username, credentials.password) },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) return null;
+      const users = (await res.json()) as any[];
+      if (!Array.isArray(users)) return null;
+      const target = userOrMac.toUpperCase().trim();
+      return users.find((u: any) =>
+        String(u.name || '').toUpperCase() === target ||
+        String(u['mac-address'] || '').toUpperCase() === target ||
+        String(u.comment || '').toUpperCase().includes(target)
+      ) || null;
+    } catch {
+      return null;
     }
   }
 
