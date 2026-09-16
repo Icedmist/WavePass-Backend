@@ -110,4 +110,9 @@
 - [x] **Verification**: `tsc` clean; 32/32 vitest pass including new controller-level duplicate/re-enqueue tests.
 - [x] PR [#31](https://github.com/Icedmist/WavePass-Backend/pull/31) merged to `main`.
 
+### 16. Fulfilled Re-init Stranded Reference (Issue #32, PR #33)
+- [x] **Early Return**: re-initializing payment for an already-FULFILLED order returns the existing reference with `alreadyFulfilled` before any Paystack transaction — no more stranded references with no local row.
+- [x] **Verification**: `tsc` clean; 33/33 vitest pass including the fulfilled re-init test.
+- [x] PR [#33](https://github.com/Icedmist/WavePass-Backend/pull/33) merged to `main`.
+
 
