@@ -34,14 +34,24 @@ export class PaystackController {
       metadata: { orderId: order.id, venueId: order.venueId, planId: order.planId },
     });
 
-    await this.prisma.payment.create({
-      data: {
-        orderId: order.id,
-        providerReference: reference,
-        amountMinor: order.amountMinor,
-        status: 'PENDING',
-      },
-    });
+    // Idempotent re-init: a second initialize for the same order refreshes the
+    // PENDING payment row instead of crashing on the unique orderId (P2002).
+    const existing = await this.prisma.payment.findUnique({ where: { orderId: order.id } });
+    if (existing && existing.status !== 'FULFILLED') {
+      await this.prisma.payment.update({
+        where: { id: existing.id },
+        data: { providerReference: reference, amountMinor: order.amountMinor, status: 'PENDING' },
+      });
+    } else if (!existing) {
+      await this.prisma.payment.create({
+        data: {
+          orderId: order.id,
+          providerReference: reference,
+          amountMinor: order.amountMinor,
+          status: 'PENDING',
+        },
+      });
+    }
 
     // Only the public checkout URL/access code goes to the client.
     return { authorizationUrl: (init as any).data.authorization_url, reference };
@@ -70,7 +80,22 @@ export class PaystackController {
 
     const existing = await this.prisma.webhookEvent.findUnique({ where: { eventKey } });
     if (existing) {
-      // Duplicate delivery — ack and stop. No double fulfilment.
+      // Duplicate delivery — but if fulfilment never ran (e.g. Redis was down
+      // when the first delivery arrived and enqueue threw), re-enqueue now.
+      // jobId = reference makes this a safe no-op when already queued/done.
+      if (body?.event === 'charge.success' && body?.data?.reference) {
+        const payment = await this.prisma.payment.findUnique({
+          where: { providerReference: body.data.reference },
+        });
+        if (payment && payment.status !== 'FULFILLED') {
+          await this.fulfilmentQueue.enqueue({ reference: body.data.reference });
+          await this.prisma.webhookEvent.update({
+            where: { eventKey },
+            data: { status: 'requeued' },
+          });
+          return { received: true, duplicate: true, requeued: true };
+        }
+      }
       return { received: true, duplicate: true };
     }
 

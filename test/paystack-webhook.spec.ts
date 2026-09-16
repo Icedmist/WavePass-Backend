@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createHmac } from 'crypto';
 import { PaystackService } from '../src/modules/paystack/paystack.service';
+import { PaystackController } from '../src/modules/paystack/paystack.controller';
 
 describe('Paystack webhook signature', () => {
   const secret = 'sk_test_nexawavepass_secret_123';
@@ -51,5 +52,53 @@ describe('Paystack webhook controller idempotency', () => {
     // non-success should not enqueue
     const other = { event: 'charge.failed', data: { reference: 'wp_1', id: 42 } };
     expect(other.event === 'charge.success').toBe(false);
+  });
+
+  it('re-enqueues fulfilment on duplicate delivery when payment is still pending', async () => {
+    const enqueued: any[] = [];
+    const prisma: any = {
+      webhookEvent: {
+        findUnique: vi.fn(async () => ({ eventKey: 'charge.success:wp_9:7', status: 'queued' })),
+        update: vi.fn(async () => ({})),
+      },
+      payment: {
+        findUnique: vi.fn(async () => ({ id: 'pay-1', status: 'PENDING' })),
+      },
+    };
+    const queue: any = { enqueue: vi.fn(async (d: any) => { enqueued.push(d); }) };
+    const paystack = new PaystackService();
+    const controller = new PaystackController(paystack, prisma, queue);
+
+    const secret = process.env.PAYSTACK_SECRET_KEY as string;
+    const body = { event: 'charge.success', data: { reference: 'wp_9', id: 7 } };
+    const raw = Buffer.from(JSON.stringify(body));
+    const sig = createHmac('sha512', secret).update(raw).digest('hex');
+
+    const res = await controller.webhook(sig, { rawBody: raw } as any, body);
+    expect(res).toMatchObject({ received: true, duplicate: true, requeued: true });
+    expect(queue.enqueue).toHaveBeenCalledWith({ reference: 'wp_9' });
+  });
+
+  it('acks duplicate without re-enqueue when payment already fulfilled', async () => {
+    const prisma: any = {
+      webhookEvent: {
+        findUnique: vi.fn(async () => ({ eventKey: 'charge.success:wp_8:6', status: 'queued' })),
+        update: vi.fn(async () => ({})),
+      },
+      payment: {
+        findUnique: vi.fn(async () => ({ id: 'pay-1', status: 'FULFILLED' })),
+      },
+    };
+    const queue: any = { enqueue: vi.fn(async () => ({})) };
+    const controller = new PaystackController(new PaystackService(), prisma, queue);
+
+    const secret = process.env.PAYSTACK_SECRET_KEY as string;
+    const body = { event: 'charge.success', data: { reference: 'wp_8', id: 6 } };
+    const raw = Buffer.from(JSON.stringify(body));
+    const sig = createHmac('sha512', secret).update(raw).digest('hex');
+
+    const res = await controller.webhook(sig, { rawBody: raw } as any, body);
+    expect(res).toMatchObject({ received: true, duplicate: true });
+    expect(queue.enqueue).not.toHaveBeenCalled();
   });
 });
