@@ -25,12 +25,19 @@
 /ip/hotspot/walled-garden/ip add dst-host="*.vercel.app" action=accept comment="WavePass: Vercel portal"
 /ip/hotspot/walled-garden add dst-host="portal.nexawavepass.local" action=accept comment="WavePass: Local portal"
 
-# 4. Create Standard Plan User Profiles (1h, 12h, 24h)
+# 4. Create Standard and Multi-Device Plan User Profiles
 /ip/hotspot/user/profile add name="profile_1h" session-timeout=1h keepalive-timeout=2m shared-users=1 status-autorefresh=1m rate-limit="10M/5M" comment="WavePass 1-Hour Profile"
 /ip/hotspot/user/profile add name="profile_12h" session-timeout=12h keepalive-timeout=2m shared-users=1 status-autorefresh=1m rate-limit="15M/5M" comment="WavePass 12-Hour Profile"
 /ip/hotspot/user/profile add name="profile_1d" session-timeout=1d keepalive-timeout=2m shared-users=1 status-autorefresh=1m rate-limit="20M/10M" comment="WavePass 24-Hour Profile"
+/ip/hotspot/user/profile add name="profile_duo" session-timeout=1d keepalive-timeout=2m shared-users=2 status-autorefresh=1m rate-limit="15M/5M" comment="WavePass Duo Profile (2 Devices)"
+/ip/hotspot/user/profile add name="profile_family" session-timeout=1d keepalive-timeout=2m shared-users=5 status-autorefresh=1m rate-limit="25M/10M" comment="WavePass Family Profile (5 Devices)"
 
-# 5. Low-RAM Memory Auto-Cleanup Script & Scheduler (Mikhmon Parity)
+# 5. Anti-Tethering Firewall Mangle Rule (Blocks Phone Hotspot Forwarding)
+# Downstream packets to clients have TTL set to 1. The connected phone consumes the packets locally,
+# but if the phone attempts to forward/tether packets to downstream devices, TTL decrements to 0 and packets are dropped.
+/ip/firewall/mangle add chain=postrouting action=change-ttl new-ttl=set:1 out-interface=bridge1 comment="WavePass: Anti-Tethering"
+
+# 6. Low-RAM Memory Auto-Cleanup Script & Scheduler (Mikhmon Parity)
 :if ([:len [/system/script find name="wavepass-cleanup"]] = 0) do={
   /system script add name="wavepass-cleanup" source={/ip hotspot user remove [find comment="expired"]} comment="WavePass expired user purge"
 }

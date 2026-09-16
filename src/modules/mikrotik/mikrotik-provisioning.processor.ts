@@ -39,7 +39,11 @@ export class MikrotikProvisioningProcessor extends WorkerHost {
     const isMac = order.customerRef && /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/.test(order.customerRef);
     const username = isMac ? order.customerRef!.toUpperCase() : `wp_${randomBytes(4).toString('hex')}`;
     const password = isMac ? username : randomBytes(6).toString('hex');
-    const profile = order.plan.rateLimit || this.profileForDuration(order.plan.durationSeconds);
+    const profile = order.plan.rateLimit || this.profileForDuration(order.plan.durationSeconds, order.plan.simultaneousDevices);
+
+    // Option A: Bind strictly to device MAC address for single-device orders (simultaneousDevices === 1)
+    const isSingleDevice = (order.plan.simultaneousDevices ?? 1) === 1;
+    const macAddress = isSingleDevice && isMac ? order.customerRef!.toUpperCase() : undefined;
 
     await this.mikrotik.createHotspotUser(
       router.endpoint,
@@ -51,6 +55,7 @@ export class MikrotikProvisioningProcessor extends WorkerHost {
         sessionTimeoutSeconds: order.plan.durationSeconds,
         limitBytesTotal: order.plan.dataLimitBytes ? Number(order.plan.dataLimitBytes) : undefined,
         sharedUsers: order.plan.simultaneousDevices,
+        macAddress,
       },
     );
 
@@ -76,7 +81,11 @@ export class MikrotikProvisioningProcessor extends WorkerHost {
     };
   }
 
-  private profileForDuration(seconds: number): string {
+  private profileForDuration(seconds: number, simultaneousDevices: number = 1): string {
+    // Option C: Dedicated multi-device monetization profiles
+    if (simultaneousDevices === 2) return 'profile_duo';
+    if (simultaneousDevices > 2) return 'profile_family';
+
     if (seconds <= 1800) return 'profile_30m';
     if (seconds <= 3600) return 'profile_1h';
     if (seconds <= 7200) return 'profile_2h';
@@ -106,7 +115,12 @@ export class MikrotikProvisioningProcessor extends WorkerHost {
 
     const username = voucher.displayCodeEnc || `wp_${voucher.id.slice(0, 8)}`;
     const password = voucher.displayCodeEnc || username;
-    const profile = voucher.plan.rateLimit || this.profileForDuration(voucher.plan.durationSeconds);
+    const profile = voucher.plan.rateLimit || this.profileForDuration(voucher.plan.durationSeconds, voucher.plan.simultaneousDevices);
+
+    // Option A: Bind single-device vouchers to redeeming device MAC address
+    const isSingleDevice = (voucher.plan.simultaneousDevices ?? 1) === 1;
+    const isMac = voucher.redeemedMac && /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/.test(voucher.redeemedMac);
+    const macAddress = isSingleDevice && isMac ? voucher.redeemedMac!.toUpperCase() : undefined;
 
     await this.mikrotik.createHotspotUser(
       router.endpoint,
@@ -118,6 +132,7 @@ export class MikrotikProvisioningProcessor extends WorkerHost {
         sessionTimeoutSeconds: voucher.plan.durationSeconds,
         limitBytesTotal: voucher.plan.dataLimitBytes ? Number(voucher.plan.dataLimitBytes) : undefined,
         sharedUsers: voucher.plan.simultaneousDevices,
+        macAddress,
       },
     );
 
@@ -127,6 +142,9 @@ export class MikrotikProvisioningProcessor extends WorkerHost {
           venueId: voucher.venueId,
           routerId: router.id,
           voucherId: voucher.id,
+          mac: isMac ? voucher.redeemedMac!.toUpperCase() : null,
+          deviceId: voucher.redeemedDeviceId || null,
+          ip: voucher.redeemedIp || null,
           expiresAt: new Date(Date.now() + voucher.plan.durationSeconds * 1000),
         },
       }),

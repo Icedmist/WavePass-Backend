@@ -8,6 +8,7 @@ interface HotspotUserSpec {
   rateLimit?: string; // e.g. "2M/1M"
   limitBytesTotal?: number;
   sharedUsers?: number;
+  macAddress?: string; // Binds account strictly to device MAC address
 }
 
 /**
@@ -61,6 +62,7 @@ export class MikrotikAdapter {
       profile: spec.profile,
       'limit-uptime': spec.sessionTimeoutSeconds ? `${spec.sessionTimeoutSeconds}s` : undefined,
       'limit-bytes-total': spec.limitBytesTotal,
+      'mac-address': spec.macAddress,
       'shared-users': spec.sharedUsers?.toString(),
       comment: `wavepass-provisioned`,
     };
@@ -109,6 +111,36 @@ export class MikrotikAdapter {
     );
     if (!res.ok && res.status !== 404) {
       throw new Error(`RouterOS remove user failed: ${res.status}`);
+    }
+  }
+
+  async bindUserToMac(
+    endpoint: string,
+    credentials: { username: string; password: string },
+    username: string,
+    macAddress: string,
+  ): Promise<void> {
+    const payload = { 'mac-address': macAddress.toUpperCase() };
+    const res = await fetch(`${endpoint}/rest/ip/hotspot/user/${encodeURIComponent(username)}`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: this.basicAuth(credentials.username, credentials.password),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(10000),
+    }).catch(() => null);
+
+    if (!res || !res.ok) {
+      await fetch(`${endpoint}/rest/ip/hotspot/user/set`, {
+        method: 'POST',
+        headers: {
+          Authorization: this.basicAuth(credentials.username, credentials.password),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ numbers: username, 'mac-address': macAddress.toUpperCase() }),
+        signal: AbortSignal.timeout(10000),
+      }).catch(() => null);
     }
   }
 
