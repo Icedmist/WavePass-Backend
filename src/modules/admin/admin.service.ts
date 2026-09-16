@@ -538,6 +538,7 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
     return {
       code: row.code,
       status: row.status,
+      kind: row.kind || 'LICENSE',
       createdBy: row.createdBy,
       createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
       authorizedAt: row.authorizedAt instanceof Date ? row.authorizedAt.toISOString() : row.authorizedAt,
@@ -582,8 +583,13 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Monthly issuance: pass `venueIds` to mint one code per venue (each with the
-   * same `expiresAt`), or `count` for unassigned codes. Every code carries its
-   * own expiry date.
+   * same kind/expiry), or `count` for unassigned codes.
+   *
+   * Kinds: LICENSE (venue-bound, single-use) | MASTER (multi-use up to quota,
+   * not venue-bound) | TRIAL (short-lived single-use).
+   * Duration: `durationDays` computes expiresAt from now (null = lifetime,
+   * allowed for MASTER; LICENSE defaults 30d, TRIAL defaults 7d).
+   * Explicit `expiresAt` overrides `durationDays`.
    */
   async generateActivationCodes(
     count = 1,
@@ -592,8 +598,19 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
     createdBy = 'talk2icedmist@gmail.com',
     expiresAt?: string | Date,
     venueIds?: string[],
+    kind: 'LICENSE' | 'MASTER' | 'TRIAL' = 'LICENSE',
+    durationDays?: number | null,
   ) {
-    const expiry = expiresAt ? new Date(expiresAt) : null;
+    const k = (kind || 'LICENSE').toUpperCase() as 'LICENSE' | 'MASTER' | 'TRIAL';
+    let expiry = expiresAt ? new Date(expiresAt) : null;
+    if (!expiry && durationDays !== undefined && durationDays !== null) {
+      expiry = durationDays > 0 ? new Date(Date.now() + durationDays * 86400000) : null;
+    }
+    if (!expiry && durationDays === undefined && !expiresAt) {
+      const defaults: Record<string, number | null> = { LICENSE: 30, MASTER: null, TRIAL: 7 };
+      const d = defaults[k];
+      expiry = d ? new Date(Date.now() + d * 86400000) : null;
+    }
     const targets = venueIds && venueIds.length > 0 ? venueIds : Array(Math.max(1, count)).fill(null);
     const generated: any[] = [];
 
@@ -603,12 +620,13 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
         data: {
           code,
           status: 'AUTHORIZED',
+          kind: k,
           createdBy,
           authorizedAt: new Date(),
-          quota: quota || 1,
+          quota: k === 'MASTER' ? quota || 5 : 1,
           usedCount: 0,
           expiresAt: expiry,
-          venueId: venueId || null,
+          venueId: k === 'LICENSE' ? venueId || null : null,
           notes: note || (venueId ? `Monthly activation for venue ${venueId}` : 'Venue Activation Code'),
         },
       });
@@ -619,7 +637,7 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
       action: 'ACTIVATION_CODES_GENERATED',
       category: 'ACTIVATION',
       actor: createdBy,
-      details: { count: generated.length, codes: generated.map((g) => g.code), expiresAt: expiry?.toISOString() },
+      details: { count: generated.length, codes: generated.map((g) => g.code), kind: k, expiresAt: expiry?.toISOString() },
     });
 
     return { ok: true, count: generated.length, codes: generated };
@@ -656,29 +674,47 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
       where: { status: 'USED', redeemedBy: cleanEmail },
       orderBy: { usedAt: 'desc' },
     });
-    if (!match) {
-      return { ok: true, activated: false };
-    }
-    if (this.isExpired(match)) {
+    if (match) {
+      if (this.isExpired(match)) {
+        return {
+          ok: true,
+          activated: false,
+          expired: true,
+          code: match.code,
+          kind: (match as any).kind || 'LICENSE',
+          venueId: match.venueId,
+          usedAt: match.usedAt,
+          expiresAt: match.expiresAt,
+        };
+      }
       return {
         ok: true,
-        activated: false,
-        expired: true,
+        activated: true,
         code: match.code,
+        kind: (match as any).kind || 'LICENSE',
         venueId: match.venueId,
         usedAt: match.usedAt,
         expiresAt: match.expiresAt,
       };
     }
-
-    return {
-      ok: true,
-      activated: true,
-      code: match.code,
-      venueId: match.venueId,
-      usedAt: match.usedAt,
-      expiresAt: match.expiresAt,
-    };
+    // MASTER codes stay AUTHORIZED across multiple redeems — an active
+    // multi-use grant counts as activation until quota/expiry.
+    const master = await this.prisma.activationCode.findFirst({
+      where: { kind: 'MASTER', redeemedBy: cleanEmail, status: 'AUTHORIZED' },
+      orderBy: { usedAt: 'desc' },
+    });
+    if (master && !this.isExpired(master) && (master.usedCount || 0) > 0 && (master.usedCount || 0) < master.quota) {
+      return {
+        ok: true,
+        activated: true,
+        code: master.code,
+        kind: 'MASTER',
+        venueId: master.venueId,
+        usedAt: master.usedAt,
+        expiresAt: master.expiresAt,
+      };
+    }
+    return { ok: true, activated: false };
   }
 
   async redeemActivationCode(code: string, email: string, venueId?: string) {
@@ -712,8 +748,9 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
       return { ok: false, error: 'Activation code is not authorized. Please contact system admin.' };
     }
 
-    // Venue-bound codes only activate their assigned venue
-    if (item.venueId && venueId && item.venueId !== venueId) {
+    // Venue-bound LICENSE codes only activate their assigned venue.
+    // MASTER/TRIAL codes are not venue-bound.
+    if ((item as any).kind === 'LICENSE' && item.venueId && venueId && item.venueId !== venueId) {
       await this.logAudit({
         action: 'ACTIVATION_CODE_REDEEM_FAILED',
         category: 'ACTIVATION',
@@ -724,10 +761,14 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
       return { ok: false, error: 'This activation code was issued for a different venue.' };
     }
 
+    // MASTER codes are multi-use: consume one quota unit, stay AUTHORIZED
+    // until the quota is exhausted.
+    const isMaster = (item as any).kind === 'MASTER';
+    const nextUsed = (item.usedCount || 0) + 1;
     const updated = await this.prisma.activationCode.update({
       where: { code: cleanCode },
       data: {
-        status: 'USED',
+        status: !isMaster || nextUsed >= item.quota ? 'USED' : 'AUTHORIZED',
         redeemedBy: cleanEmail,
         venueId: venueId || item.venueId,
         usedAt: new Date(),

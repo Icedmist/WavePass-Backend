@@ -93,10 +93,17 @@ enum ActivationCodeStatus {
   EXPIRED
 }
 
+enum ActivationCodeKind {
+  LICENSE
+  MASTER
+  TRIAL
+}
+
 model ActivationCode {
   id           String               @id @default(uuid())
   code         String               @unique
   status       ActivationCodeStatus @default(AUTHORIZED)
+  kind         ActivationCodeKind   @default(LICENSE)
   createdBy    String
   createdAt    DateTime             @default(now())
   authorizedAt DateTime?
@@ -109,6 +116,7 @@ model ActivationCode {
   notes        String?
 
   @@index([status])
+  @@index([kind])
   @@index([venueId])
 }
 

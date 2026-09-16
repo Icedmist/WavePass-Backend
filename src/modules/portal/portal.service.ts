@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma.service';
 import { PaystackService } from '../paystack/paystack.service';
 import { MikrotikProvisioningQueue } from '../mikrotik/mikrotik-provisioning.queue';
@@ -105,6 +105,11 @@ export class PortalService {
   }
 
   async simulatePayment(body: { mac: string; planId: string; venueId?: string }) {
+    // NEVER mint free vouchers on a live gateway — simulation exists for
+    // mock/offline development only.
+    if (!this.paystack.isMock()) {
+      throw new ForbiddenException('Payment simulation is disabled on live gateways');
+    }
     if (!body.mac || !body.planId) {
       throw new BadRequestException('mac and planId required');
     }

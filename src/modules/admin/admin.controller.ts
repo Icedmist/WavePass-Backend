@@ -137,9 +137,9 @@ export class AdminController {
 
   @Post('activation-codes/generate')
   generateActivationCodes(
-    @Body() body: { count?: number; note?: string; quota?: number; createdBy?: string; expiresAt?: string; venueIds?: string[] },
+    @Body() body: { count?: number; note?: string; quota?: number; createdBy?: string; expiresAt?: string; venueIds?: string[]; kind?: 'LICENSE' | 'MASTER' | 'TRIAL'; durationDays?: number | null },
   ) {
-    return this.admin.generateActivationCodes(body.count, body.note, body.quota, body.createdBy, body.expiresAt, body.venueIds);
+    return this.admin.generateActivationCodes(body.count, body.note, body.quota, body.createdBy, body.expiresAt, body.venueIds, body.kind, body.durationDays);
   }
 
   @Post('activation-codes/authorize')

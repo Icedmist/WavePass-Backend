@@ -138,13 +138,45 @@ describe('AdminService Activation Codes (persistent, expiring)', () => {
     expect(check.expired).toBe(true);
   });
 
-  it('rejects venue-bound codes redeemed for a different venue', async () => {
-    const gen = await service.generateActivationCodes(
+  it('rejects venue-bound codes redeemed for a different venue', async () => {    const gen = await service.generateActivationCodes(
       1, 'Bound', 1, 'talk2icedmist@gmail.com', undefined, ['venue-a'],
     );
     const redeem = await service.redeemActivationCode(gen.codes[0].code, 'owner@venue.com', 'venue-b');
     expect(redeem.ok).toBe(false);
     expect(redeem.error).toContain('different venue');
+  });
+
+  it('issues LICENSE with 30d default, TRIAL with 7d default, MASTER lifetime', async () => {
+    const lic = await service.generateActivationCodes(1, 'Lic', 1, 'talk2icedmist@gmail.com', undefined, undefined, 'LICENSE');
+    const tri = await service.generateActivationCodes(1, 'Tri', 1, 'talk2icedmist@gmail.com', undefined, undefined, 'TRIAL');
+    const mas = await service.generateActivationCodes(1, 'Mas', 5, 'talk2icedmist@gmail.com', undefined, undefined, 'MASTER');
+    expect(lic.codes[0].kind).toBe('LICENSE');
+    expect(tri.codes[0].kind).toBe('TRIAL');
+    expect(mas.codes[0].kind).toBe('MASTER');
+    const now = Date.now();
+    expect(new Date(lic.codes[0].expiresAt).getTime()).toBeGreaterThan(now + 29 * 86400000);
+    expect(new Date(tri.codes[0].expiresAt).getTime()).toBeGreaterThan(now + 6 * 86400000);
+    expect(mas.codes[0].expiresAt).toBeNull();
+    expect(mas.codes[0].quota).toBe(5);
+  });
+
+  it('MASTER codes are multi-use up to quota and activate each redeemer', async () => {
+    const gen = await service.generateActivationCodes(1, 'Master batch', 2, 'talk2icedmist@gmail.com', undefined, undefined, 'MASTER');
+    const code = gen.codes[0].code;
+    const r1 = await service.redeemActivationCode(code, 'owner1@venue.com', 'venue-a');
+    expect(r1.ok).toBe(true);
+    expect(r1.code!.status).toBe('AUTHORIZED'); // quota remains
+    expect((await service.checkAccountActivation('owner1@venue.com')).activated).toBe(true);
+    const r2 = await service.redeemActivationCode(code, 'owner2@venue.com', 'venue-b');
+    expect(r2.ok).toBe(true);
+    expect(r2.code!.status).toBe('USED'); // quota exhausted
+    const r3 = await service.redeemActivationCode(code, 'owner3@venue.com', 'venue-c');
+    expect(r3.ok).toBe(false);
+  });
+
+  it('custom durationDays overrides kind defaults', async () => {
+    const gen = await service.generateActivationCodes(1, 'Long license', 1, 'talk2icedmist@gmail.com', undefined, undefined, 'LICENSE', 90);
+    expect(new Date(gen.codes[0].expiresAt).getTime()).toBeGreaterThan(Date.now() + 89 * 86400000);
   });
 
   it('logs audit records and retrieves system health', async () => {
