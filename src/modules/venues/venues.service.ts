@@ -107,8 +107,35 @@ export class VenuesService {
     return this.prisma.venue.update({ where: { id }, data: dto });
   }
 
-  async getDefaultVenue() {
-    let venue = await this.prisma.venue.findFirst({
+  /** New-venue setup enforcement: a venue is not sellable until it has
+   *  at least one active plan (voucher-able product) and a paired router. */
+  async getReadiness(id: string) {
+    const venue = await this.prisma.venue.findUnique({
+      where: { id },
+      include: {
+        plans: { where: { active: true }, select: { id: true } },
+        routers: { select: { id: true, status: true } },
+      },
+    });
+    if (!venue) throw new NotFoundException(`Venue with id ${id} not found`);
+    const planCount = venue.plans.length;
+    const routerCount = venue.routers.length;
+    const missing: string[] = [];
+    if (planCount === 0) missing.push('pricing plan (vouchers cannot be sold without one)');
+    if (routerCount === 0) missing.push('paired MikroTik router');
+    return {
+      venueId: id,
+      slug: venue.slug,
+      hasPlans: planCount > 0,
+      planCount,
+      hasRouter: routerCount > 0,
+      routerCount,
+      ready: missing.length === 0,
+      missing,
+    };
+  }
+
+  async getDefaultVenue() {    let venue = await this.prisma.venue.findFirst({
       include: { routers: true, plans: { where: { active: true } } },
     });
     if (!venue) {

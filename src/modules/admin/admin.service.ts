@@ -529,99 +529,119 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
     return { ok: true, record };
   }
 
-  // ── Activation Code Engine ───────────────────────────────────────────────
+  // ── Activation Code Engine (persistent, per-code expiry) ──────────────────
+  // Codes are issued by the system admin to specific venues, each carrying its
+  // own expiry date (monthly rotation). Expired codes deny activation so apps
+  // can pause all activity until a fresh code is redeemed.
 
-  private activationCodes: Array<{
-    code: string;
-    status: 'AUTHORIZED' | 'PENDING' | 'USED' | 'REVOKED';
-    createdBy: string;
-    createdAt: string;
-    authorizedAt?: string;
-    redeemedBy?: string;
-    venueId?: string;
-    usedAt?: string;
-    quota: number;
-    notes?: string;
-  }> = [
-    {
-      code: 'WP-ACT-NEXA-2025',
-      status: 'AUTHORIZED',
-      createdBy: 'talk2icedmist@gmail.com',
-      createdAt: new Date().toISOString(),
-      authorizedAt: new Date().toISOString(),
-      quota: 1,
-      notes: 'Master activation code for initial system rollout',
-    },
-    {
-      code: 'WP-ACT-VIP-8899',
-      status: 'AUTHORIZED',
-      createdBy: 'talk2icedmist@gmail.com',
-      createdAt: new Date().toISOString(),
-      authorizedAt: new Date().toISOString(),
-      quota: 1,
-      notes: 'Production rollout voucher activation',
-    },
-  ];
-
-  async listActivationCodes() {
+  private toActivationView(row: any) {
     return {
-      ok: true,
-      count: this.activationCodes.length,
-      codes: this.activationCodes,
+      code: row.code,
+      status: row.status,
+      createdBy: row.createdBy,
+      createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
+      authorizedAt: row.authorizedAt instanceof Date ? row.authorizedAt.toISOString() : row.authorizedAt,
+      redeemedBy: row.redeemedBy,
+      venueId: row.venueId,
+      usedAt: row.usedAt instanceof Date ? row.usedAt.toISOString() : row.usedAt,
+      quota: row.quota,
+      usedCount: row.usedCount,
+      expiresAt: row.expiresAt instanceof Date ? row.expiresAt.toISOString() : row.expiresAt,
+      notes: row.notes,
     };
   }
 
-  async generateActivationCodes(count = 1, note?: string, quota = 1, createdBy = 'talk2icedmist@gmail.com') {
-    const generated: any[] = [];
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  private isExpired(row: any): boolean {
+    if (row.status === 'EXPIRED') return true;
+    if (row.expiresAt && new Date(row.expiresAt).getTime() < Date.now()) return true;
+    return false;
+  }
 
-    for (let i = 0; i < count; i++) {
-      let part1 = '';
-      let part2 = '';
-      for (let j = 0; j < 4; j++) {
-        part1 += chars[Math.floor(Math.random() * chars.length)];
-        part2 += chars[Math.floor(Math.random() * chars.length)];
-      }
-      const code = `WP-ACT-${part1}-${part2}`;
-      const record = {
-        code,
-        status: 'AUTHORIZED' as const,
-        createdBy,
-        createdAt: new Date().toISOString(),
-        authorizedAt: new Date().toISOString(),
-        quota: quota || 1,
-        notes: note || 'Venue Activation Code',
-      };
-      this.activationCodes.unshift(record);
-      generated.push(record);
+  /** Lazily flip past-due codes to EXPIRED (no cron required). */
+  private async sweepExpiredCodes() {
+    try {
+      await this.prisma.activationCode.updateMany({
+        where: { expiresAt: { lt: new Date() }, status: { in: ['PENDING', 'AUTHORIZED', 'USED'] } },
+        data: { status: 'EXPIRED' },
+      });
+    } catch {}
+  }
+
+  async listActivationCodes() {
+    await this.sweepExpiredCodes();
+    const rows = await this.prisma.activationCode.findMany({ orderBy: { createdAt: 'desc' } });
+    return { ok: true, count: rows.length, codes: rows.map((r) => this.toActivationView(r)) };
+  }
+
+  private randomCodePart(): string {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let part = '';
+    for (let j = 0; j < 4; j++) part += chars[Math.floor(Math.random() * chars.length)];
+    return part;
+  }
+
+  /**
+   * Monthly issuance: pass `venueIds` to mint one code per venue (each with the
+   * same `expiresAt`), or `count` for unassigned codes. Every code carries its
+   * own expiry date.
+   */
+  async generateActivationCodes(
+    count = 1,
+    note?: string,
+    quota = 1,
+    createdBy = 'talk2icedmist@gmail.com',
+    expiresAt?: string | Date,
+    venueIds?: string[],
+  ) {
+    const expiry = expiresAt ? new Date(expiresAt) : null;
+    const targets = venueIds && venueIds.length > 0 ? venueIds : Array(Math.max(1, count)).fill(null);
+    const generated: any[] = [];
+
+    for (const venueId of targets) {
+      const code = `WP-ACT-${this.randomCodePart()}-${this.randomCodePart()}`;
+      const record = await this.prisma.activationCode.create({
+        data: {
+          code,
+          status: 'AUTHORIZED',
+          createdBy,
+          authorizedAt: new Date(),
+          quota: quota || 1,
+          usedCount: 0,
+          expiresAt: expiry,
+          venueId: venueId || null,
+          notes: note || (venueId ? `Monthly activation for venue ${venueId}` : 'Venue Activation Code'),
+        },
+      });
+      generated.push(this.toActivationView(record));
     }
 
     await this.logAudit({
       action: 'ACTIVATION_CODES_GENERATED',
       category: 'ACTIVATION',
       actor: createdBy,
-      details: { count, codes: generated.map((g) => g.code) },
+      details: { count: generated.length, codes: generated.map((g) => g.code), expiresAt: expiry?.toISOString() },
     });
 
     return { ok: true, count: generated.length, codes: generated };
   }
 
   async authorizeActivationCode(code: string, status: 'AUTHORIZED' | 'REVOKED') {
-    const item = this.activationCodes.find((c) => c.code.toUpperCase() === code.toUpperCase());
+    const clean = code.toUpperCase().trim();
+    const item = await this.prisma.activationCode.findUnique({ where: { code: clean } });
     if (!item) {
       return { ok: false, error: 'Activation code not found' };
     }
-    item.status = status;
-    if (status === 'AUTHORIZED') {
-      item.authorizedAt = new Date().toISOString();
-    }
+    const updated = await this.prisma.activationCode.update({
+      where: { code: clean },
+      data: { status, authorizedAt: status === 'AUTHORIZED' ? new Date() : item.authorizedAt },
+    });
     await this.logAudit({
       action: status === 'AUTHORIZED' ? 'ACTIVATION_CODE_AUTHORIZED' : 'ACTIVATION_CODE_REVOKED',
       category: 'ACTIVATION',
       actor: 'system_admin',
-      details: { code },
+      details: { code: clean },
     });
-    return { ok: true, code: item };
+    return { ok: true, code: this.toActivationView(updated) };
   }
 
   async checkAccountActivation(email: string) {
@@ -631,16 +651,33 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
       return { ok: true, activated: true, role: 'system_admin', code: 'SUPER-ADMIN' };
     }
 
-    const match = this.activationCodes.find(
-      (c) => c.status === 'USED' && c.redeemedBy?.toLowerCase() === cleanEmail,
-    );
+    await this.sweepExpiredCodes();
+    const match = await this.prisma.activationCode.findFirst({
+      where: { status: 'USED', redeemedBy: cleanEmail },
+      orderBy: { usedAt: 'desc' },
+    });
+    if (!match) {
+      return { ok: true, activated: false };
+    }
+    if (this.isExpired(match)) {
+      return {
+        ok: true,
+        activated: false,
+        expired: true,
+        code: match.code,
+        venueId: match.venueId,
+        usedAt: match.usedAt,
+        expiresAt: match.expiresAt,
+      };
+    }
 
     return {
       ok: true,
-      activated: !!match,
-      code: match?.code,
-      venueId: match?.venueId,
-      usedAt: match?.usedAt,
+      activated: true,
+      code: match.code,
+      venueId: match.venueId,
+      usedAt: match.usedAt,
+      expiresAt: match.expiresAt,
     };
   }
 
@@ -648,7 +685,7 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
     const cleanCode = code.toUpperCase().trim();
     const cleanEmail = email.toLowerCase().trim();
 
-    const item = this.activationCodes.find((c) => c.code.toUpperCase() === cleanCode);
+    const item = await this.prisma.activationCode.findUnique({ where: { code: cleanCode } });
     if (!item) {
       await this.logAudit({
         action: 'ACTIVATION_CODE_REDEEM_FAILED',
@@ -660,7 +697,14 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
       return { ok: false, error: 'Invalid activation code' };
     }
 
-    if (item.status === 'USED') {
+    if (this.isExpired(item)) {
+      if (item.status !== 'EXPIRED') {
+        await this.prisma.activationCode.update({ where: { code: cleanCode }, data: { status: 'EXPIRED' } });
+      }
+      return { ok: false, error: 'This activation code has expired. Please request a new monthly code from the system admin.', expired: true };
+    }
+
+    if (item.status === 'USED' || item.usedCount >= item.quota) {
       return { ok: false, error: 'Activation code has already been redeemed' };
     }
 
@@ -668,23 +712,41 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
       return { ok: false, error: 'Activation code is not authorized. Please contact system admin.' };
     }
 
-    item.status = 'USED';
-    item.redeemedBy = cleanEmail;
-    item.venueId = venueId;
-    item.usedAt = new Date().toISOString();
+    // Venue-bound codes only activate their assigned venue
+    if (item.venueId && venueId && item.venueId !== venueId) {
+      await this.logAudit({
+        action: 'ACTIVATION_CODE_REDEEM_FAILED',
+        category: 'ACTIVATION',
+        actor: cleanEmail,
+        details: { code: cleanCode, reason: 'VENUE_MISMATCH', expected: item.venueId, got: venueId },
+        status: 'FAILURE',
+      });
+      return { ok: false, error: 'This activation code was issued for a different venue.' };
+    }
+
+    const updated = await this.prisma.activationCode.update({
+      where: { code: cleanCode },
+      data: {
+        status: 'USED',
+        redeemedBy: cleanEmail,
+        venueId: venueId || item.venueId,
+        usedAt: new Date(),
+        usedCount: { increment: 1 },
+      },
+    });
 
     await this.logAudit({
       action: 'ACTIVATION_CODE_REDEEMED',
       category: 'ACTIVATION',
       actor: cleanEmail,
-      details: { code: cleanCode, venueId },
+      details: { code: cleanCode, venueId: updated.venueId },
       status: 'SUCCESS',
     });
 
     return {
       ok: true,
       message: 'Venue activated successfully! You can now set up your router.',
-      code: item,
+      code: this.toActivationView(updated),
     };
   }
 }

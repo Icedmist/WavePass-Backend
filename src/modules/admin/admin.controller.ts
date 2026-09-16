@@ -137,9 +137,9 @@ export class AdminController {
 
   @Post('activation-codes/generate')
   generateActivationCodes(
-    @Body() body: { count?: number; note?: string; quota?: number; createdBy?: string },
+    @Body() body: { count?: number; note?: string; quota?: number; createdBy?: string; expiresAt?: string; venueIds?: string[] },
   ) {
-    return this.admin.generateActivationCodes(body.count, body.note, body.quota, body.createdBy);
+    return this.admin.generateActivationCodes(body.count, body.note, body.quota, body.createdBy, body.expiresAt, body.venueIds);
   }
 
   @Post('activation-codes/authorize')

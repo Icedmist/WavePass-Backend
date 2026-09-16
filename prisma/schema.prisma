@@ -85,6 +85,33 @@ enum CashoutStatus {
   REJECTED
 }
 
+enum ActivationCodeStatus {
+  PENDING
+  AUTHORIZED
+  USED
+  REVOKED
+  EXPIRED
+}
+
+model ActivationCode {
+  id           String               @id @default(uuid())
+  code         String               @unique
+  status       ActivationCodeStatus @default(AUTHORIZED)
+  createdBy    String
+  createdAt    DateTime             @default(now())
+  authorizedAt DateTime?
+  redeemedBy   String?
+  venueId      String?
+  usedAt       DateTime?
+  quota        Int                  @default(1)
+  usedCount    Int                  @default(0)
+  expiresAt    DateTime?
+  notes        String?
+
+  @@index([status])
+  @@index([venueId])
+}
+
 model Venue {
   id        String   @id @default(uuid())
   name      String

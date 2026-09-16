@@ -32,6 +32,11 @@ export class VenuesController {
     return this.venues.getDefaultVenue();
   }
 
+  @Get(':id/readiness')
+  readiness(@Param('id') id: string) {
+    return this.venues.getReadiness(id);
+  }
+
   @Get(':id')
   getById(@Param('id') id: string) {
     return this.venues.getVenueById(id);
