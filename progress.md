@@ -115,4 +115,10 @@
 - [x] **Verification**: `tsc` clean; 33/33 vitest pass including the fulfilled re-init test.
 - [x] PR [#33](https://github.com/Icedmist/WavePass-Backend/pull/33) merged to `main`.
 
+### 17. Activation Kinds, Custom Durations & Simulate Gate (Issue #34, PR #35)
+- [x] **Kinds**: `ActivationCodeKind` (LICENSE venue-bound single-use / MASTER multi-use to quota / TRIAL short single-use) persisted with migration; per-kind defaults 30d / lifetime / 7d, `durationDays` or explicit `expiresAt` override.
+- [x] **Security**: `simulate-payment` throws Forbidden on live gateways (was minting free vouchers in production).
+- [x] **Verification**: `tsc` clean; 38/38 vitest pass (kind/duration/quota/simulate specs).
+- [x] PR [#35](https://github.com/Icedmist/WavePass-Backend/pull/35) merged to `main`.
+
 
