@@ -202,6 +202,34 @@ export class PortalService {
       });
     }
 
+    // Fallback 2: check if device has a redeemed active voucher even if session record was reset
+    let activeVoucher: any = null;
+    if (!session && normalized) {
+      const redeemedVouchers = await this.prisma.voucher.findMany({
+        where: { redeemedMac: normalized, status: 'REDEEMED' },
+        include: { plan: true, venue: true },
+        orderBy: { redeemedAt: 'desc' },
+        take: 3,
+      });
+
+      const now = Date.now();
+      for (const v of redeemedVouchers) {
+        const durationMs = (v.plan?.durationSeconds || 3600) * 1000;
+        const expiry = v.expiresAt ? v.expiresAt.getTime() : (v.redeemedAt ? v.redeemedAt.getTime() + durationMs : 0);
+        if (expiry > now) {
+          activeVoucher = { ...v, calculatedExpiry: new Date(expiry) };
+          session = {
+            id: `v_${v.id}`,
+            mac: normalized,
+            voucher: v,
+            expiresAt: new Date(expiry),
+            startedAt: v.redeemedAt || v.issuedAt,
+          };
+          break;
+        }
+      }
+    }
+
     // Try to enrich with live router data (bytes, IP) if session exists
     let live: any = null;
     let dataUsedBytes = 0;
@@ -231,8 +259,11 @@ export class PortalService {
       return {
         hasPaid: false,
         walledGardenOpen: true,
-        mac: normalized || session?.mac || null,
+        mac: normalized || null,
         ip: deviceIp,
+        voucherCode: null,
+        username: null,
+        password: null,
         remainingMs: 0,
         dataUsedBytes: 0,
         dataLimitBytes: null,
@@ -251,6 +282,8 @@ export class PortalService {
     const remainingMs = Math.max(0, expiresAt - now);
     const hasPaid = remainingMs > 0;
     const pct = dataLimitBytes ? Math.min(100, Math.round((dataUsedBytes / dataLimitBytes) * 100)) : 0;
+    const code = session.voucher?.displayCodeEnc || session.voucher?.id || null;
+    const credUser = code || normalized;
 
     return {
       hasPaid,
@@ -258,6 +291,10 @@ export class PortalService {
       mac: normalized,
       ip: deviceIp,
       sessionId: session.id,
+      voucherCode: code,
+      username: credUser,
+      password: credUser,
+      planName: session.voucher?.plan?.name || 'Internet Pass',
       remainingMs,
       expiresAt: session.expiresAt,
       startedAt: session.startedAt,
@@ -268,10 +305,237 @@ export class PortalService {
       paymentMethods: ['card', 'transfer', 'voucher'],
       voucherAccess: true,
       router: session.router,
+      reconnectUrl: `http://192.168.88.1/login?username=${encodeURIComponent(credUser)}&password=${encodeURIComponent(credUser)}`,
     };
   }
 
   async getSessionStatus(mac: string) {
     return this.getLandingStatus(mac);
   }
+
+  /**
+   * Resolves active access (allocated voucher or online pass) tied to a client MAC address.
+   * Enables connected/reconnecting devices to view their assigned voucher and reconnect with 1 tap.
+   */
+  async getDeviceActiveAccess(mac?: string, ip?: string) {
+    const normalized = (mac || '').toUpperCase().trim();
+    if (!normalized && !ip) {
+      return {
+        hasActiveAccess: false,
+        mac: null,
+        source: null,
+        voucherCode: null,
+        username: null,
+        password: null,
+        planName: null,
+        durationSeconds: 0,
+        remainingMs: 0,
+        remainingSeconds: 0,
+        remainingFormatted: '00:00:00',
+        expiresAt: null,
+        startedAt: null,
+        reconnectUrl: null,
+        message: 'No device MAC address or IP provided',
+      };
+    }
+
+    const now = Date.now();
+
+    // 1. Check for active Session in database
+    let session: any = null;
+    if (normalized) {
+      session = await this.prisma.session.findFirst({
+        where: {
+          mac: normalized,
+          status: 'ACTIVE',
+          OR: [{ expiresAt: { gt: new Date(now) } }, { expiresAt: null }],
+        },
+        include: {
+          voucher: { include: { plan: true } },
+          router: { select: { id: true, name: true, endpoint: true } },
+        },
+        orderBy: { startedAt: 'desc' },
+      });
+    }
+
+    if (!session && ip) {
+      session = await this.prisma.session.findFirst({
+        where: {
+          ip,
+          status: 'ACTIVE',
+          OR: [{ expiresAt: { gt: new Date(now) } }, { expiresAt: null }],
+        },
+        include: {
+          voucher: { include: { plan: true } },
+          router: { select: { id: true, name: true, endpoint: true } },
+        },
+        orderBy: { startedAt: 'desc' },
+      });
+    }
+
+    // 2. Check for active redeemed Voucher tied to this MAC
+    let activeVoucher: any = null;
+    if (normalized) {
+      const redeemedVouchers = await this.prisma.voucher.findMany({
+        where: {
+          redeemedMac: normalized,
+          status: 'REDEEMED',
+        },
+        include: { plan: true, venue: true },
+        orderBy: { redeemedAt: 'desc' },
+        take: 5,
+      });
+
+      for (const v of redeemedVouchers) {
+        const durationMs = (v.plan?.durationSeconds || 3600) * 1000;
+        const expiry = v.expiresAt ? v.expiresAt.getTime() : (v.redeemedAt ? v.redeemedAt.getTime() + durationMs : 0);
+        if (expiry > now) {
+          activeVoucher = { ...v, calculatedExpiry: new Date(expiry) };
+          break;
+        }
+      }
+    }
+
+    // 3. Check for active Paystack online order tied to this MAC
+    let activeOrder: any = null;
+    if (normalized) {
+      const orders = await this.prisma.order.findMany({
+        where: {
+          customerRef: normalized,
+          status: 'ACTIVE',
+        },
+        include: { plan: true, venue: true },
+        orderBy: { createdAt: 'desc' },
+        take: 5,
+      });
+
+      for (const ord of orders) {
+        const durationMs = (ord.plan?.durationSeconds || 3600) * 1000;
+        const expiry = ord.createdAt.getTime() + durationMs;
+        if (expiry > now) {
+          activeOrder = { ...ord, calculatedExpiry: new Date(expiry) };
+          break;
+        }
+      }
+    }
+
+    // Prioritize voucher session if available
+    if (session && session.voucher) {
+      const exp = session.expiresAt ? session.expiresAt.getTime() : (now + 3600000);
+      const remainingMs = Math.max(0, exp - now);
+      const code = session.voucher.displayCodeEnc || session.voucher.id;
+      return {
+        hasActiveAccess: remainingMs > 0,
+        mac: normalized || session.mac,
+        source: 'voucher',
+        voucherCode: code,
+        username: code,
+        password: code,
+        planName: session.voucher.plan?.name || 'Voucher Pass',
+        durationSeconds: session.voucher.plan?.durationSeconds || 3600,
+        remainingMs,
+        remainingSeconds: Math.floor(remainingMs / 1000),
+        remainingFormatted: this.formatRemaining(remainingMs),
+        expiresAt: session.expiresAt ? session.expiresAt.toISOString() : new Date(exp).toISOString(),
+        startedAt: session.startedAt ? session.startedAt.toISOString() : null,
+        reconnectUrl: `http://192.168.88.1/login?username=${encodeURIComponent(code)}&password=${encodeURIComponent(code)}`,
+      };
+    }
+
+    if (activeVoucher) {
+      const exp = activeVoucher.calculatedExpiry.getTime();
+      const remainingMs = Math.max(0, exp - now);
+      const code = activeVoucher.displayCodeEnc || activeVoucher.id;
+      return {
+        hasActiveAccess: remainingMs > 0,
+        mac: normalized,
+        source: 'voucher',
+        voucherCode: code,
+        username: code,
+        password: code,
+        planName: activeVoucher.plan?.name || 'Voucher Pass',
+        durationSeconds: activeVoucher.plan?.durationSeconds || 3600,
+        remainingMs,
+        remainingSeconds: Math.floor(remainingMs / 1000),
+        remainingFormatted: this.formatRemaining(remainingMs),
+        expiresAt: activeVoucher.calculatedExpiry.toISOString(),
+        startedAt: activeVoucher.redeemedAt ? activeVoucher.redeemedAt.toISOString() : null,
+        reconnectUrl: `http://192.168.88.1/login?username=${encodeURIComponent(code)}&password=${encodeURIComponent(code)}`,
+      };
+    }
+
+    if (session && !session.voucher) {
+      const exp = session.expiresAt ? session.expiresAt.getTime() : (now + 3600000);
+      const remainingMs = Math.max(0, exp - now);
+      const user = session.mac || normalized;
+      return {
+        hasActiveAccess: remainingMs > 0,
+        mac: normalized || session.mac,
+        source: 'online',
+        voucherCode: null,
+        username: user,
+        password: user,
+        planName: 'Online Pass',
+        durationSeconds: 3600,
+        remainingMs,
+        remainingSeconds: Math.floor(remainingMs / 1000),
+        remainingFormatted: this.formatRemaining(remainingMs),
+        expiresAt: session.expiresAt ? session.expiresAt.toISOString() : new Date(exp).toISOString(),
+        startedAt: session.startedAt ? session.startedAt.toISOString() : null,
+        reconnectUrl: `http://192.168.88.1/login?username=${encodeURIComponent(user)}&password=${encodeURIComponent(user)}`,
+      };
+    }
+
+    if (activeOrder) {
+      const exp = activeOrder.calculatedExpiry.getTime();
+      const remainingMs = Math.max(0, exp - now);
+      const user = normalized;
+      return {
+        hasActiveAccess: remainingMs > 0,
+        mac: normalized,
+        source: 'online',
+        voucherCode: null,
+        username: user,
+        password: user,
+        planName: activeOrder.plan?.name || 'Online Pass',
+        durationSeconds: activeOrder.plan?.durationSeconds || 3600,
+        remainingMs,
+        remainingSeconds: Math.floor(remainingMs / 1000),
+        remainingFormatted: this.formatRemaining(remainingMs),
+        expiresAt: activeOrder.calculatedExpiry.toISOString(),
+        startedAt: activeOrder.createdAt.toISOString(),
+        reconnectUrl: `http://192.168.88.1/login?username=${encodeURIComponent(user)}&password=${encodeURIComponent(user)}`,
+      };
+    }
+
+    return {
+      hasActiveAccess: false,
+      mac: normalized || null,
+      source: null,
+      voucherCode: null,
+      username: null,
+      password: null,
+      planName: null,
+      durationSeconds: 0,
+      remainingMs: 0,
+      remainingSeconds: 0,
+      remainingFormatted: '00:00:00',
+      expiresAt: null,
+      startedAt: null,
+      reconnectUrl: null,
+    };
+  }
+
+  private formatRemaining(ms: number): string {
+    if (ms <= 0) return '00:00:00';
+    const totalSeconds = Math.floor(ms / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    if (hours > 0) {
+      return `${hours}h ${minutes}m ${seconds}s`;
+    }
+    return `${minutes}m ${seconds}s`;
+  }
 }
+

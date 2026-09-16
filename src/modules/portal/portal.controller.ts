@@ -46,6 +46,16 @@ export class PortalController {
     return res.status(302).header('Location', target).send();
   }
 
+  @Get('active-session')
+  activeSession(@Query('mac') mac?: string, @Query('ip') ip?: string) {
+    return this.portal.getDeviceActiveAccess(mac, ip);
+  }
+
+  @Get('device/:mac/active-voucher')
+  deviceActiveVoucher(@Param('mac') mac: string) {
+    return this.portal.getDeviceActiveAccess(mac);
+  }
+
   @Get('sessions/:mac')
   sessionStatus(@Param('mac') mac: string) {
     return this.portal.getSessionStatus(mac);
