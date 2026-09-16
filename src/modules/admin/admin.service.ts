@@ -291,9 +291,28 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  async deleteUserAccount(email?: string) {
+  async deleteUserAccount(email?: string, supabaseUserId?: string) {
     const targetEmail = (email || 'talk2icedmist@gmail.com').toLowerCase().trim();
     const user = await this.prisma.user.findUnique({ where: { email: targetEmail } });
+
+    // 1. Delete user from Supabase Auth admin API if service key exists
+    const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY;
+    const uidToDelete = supabaseUserId || user?.id;
+
+    if (supabaseUrl && serviceKey && uidToDelete) {
+      try {
+        await fetch(`${supabaseUrl.replace(/\/$/, '')}/auth/v1/admin/users/${uidToDelete}`, {
+          method: 'DELETE',
+          headers: {
+            Authorization: `Bearer ${serviceKey}`,
+            apikey: serviceKey,
+          },
+        });
+      } catch (_) {}
+    }
+
+    // 2. Clean up Prisma database records
     if (user) {
       await this.prisma.venueMember.deleteMany({ where: { userId: user.id } });
       await this.prisma.user.update({

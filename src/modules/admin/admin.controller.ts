@@ -66,11 +66,11 @@ export class AdminController {
     if (!body.password) {
       return { ok: false, error: 'Password is required to delete account' };
     }
-    const ok = this.auth.verifyPassword(body.password, body.email);
-    if (!ok) {
+    const check = await this.auth.verifyUserOrAdminPassword(body.password, body.email);
+    if (!check.ok) {
       return { ok: false, error: 'Incorrect password. Account deletion rejected.' };
     }
-    const result = await this.admin.deleteUserAccount(body.email);
+    const result = await this.admin.deleteUserAccount(body.email, check.supabaseUserId);
     return { ok: true, message: 'Account deleted successfully', result };
   }
 
