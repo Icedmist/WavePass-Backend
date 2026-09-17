@@ -516,7 +516,7 @@ export class PortalService {
     const vouchers = await this.prisma.voucher.findMany({
       where: {
         venueId: venue.id,
-        status: 'ACTIVE',
+        status: { in: ['ACTIVE', 'REDEEMED'] },
         OR: [{ expiresAt: { gt: now } }, { expiresAt: null }],
       },
       include: { plan: true },

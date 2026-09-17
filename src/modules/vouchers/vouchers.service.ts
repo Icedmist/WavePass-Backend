@@ -178,11 +178,32 @@ export class VouchersService {
       if (v.status === 'EXPIRED' || (v.expiresAt && v.expiresAt < new Date())) {
         throw new GoneException('Voucher has expired');
       }
-      // Checkout-issued vouchers are already ACTIVE — claiming = returning credentials, not re-redeeming.
+      // Checkout-issued vouchers arrive ACTIVE — first real use flips them to
+      // REDEEMED with device binding (PRD §10). Concurrent first claims race
+      // on the conditional guard; same-device losers stay idempotent.
       if (v.status === 'ACTIVE') {
         const expiry = v.expiresAt ? v.expiresAt.getTime() : 0;
         if (v.expiresAt && expiry < Date.now()) throw new GoneException('Voucher has expired');
-        return v;
+        // Already claimed by this device — idempotent return.
+        if (mac && v.redeemedMac === mac) return v;
+        if (!mac && !ctx.deviceId && !ctx.ip) return v;
+        const claimed = await tx.voucher.updateMany({
+          where: { codeHash: v.codeHash, status: 'ACTIVE' },
+          data: {
+            status: 'REDEEMED',
+            redeemedAt: new Date(),
+            firstLoginAt: new Date(),
+            redeemedDeviceId: ctx.deviceId || mac,
+            redeemedIp: ctx.ip,
+            redeemedMac: mac || v.redeemedMac,
+          },
+        });
+        if (claimed.count === 0) {
+          const current = await tx.voucher.findUniqueOrThrow({ where: { codeHash: v.codeHash } });
+          if (mac && current.redeemedMac === mac) return current;
+          throw new ConflictException('Voucher already redeemed');
+        }
+        return tx.voucher.findUniqueOrThrow({ where: { codeHash: v.codeHash } });
       }
       // Idempotent re-claim from same device
       if (v.status === 'REDEEMED' && mac && v.redeemedMac === mac) {

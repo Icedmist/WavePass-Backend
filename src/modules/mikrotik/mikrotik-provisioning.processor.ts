@@ -4,6 +4,7 @@ import { Logger } from '@nestjs/common';
 import { createHash, randomBytes, randomInt } from 'crypto';
 import { PrismaService } from '../../common/prisma.service';
 import { MikrotikAdapter } from './mikrotik.adapter';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Processor('mikrotik-provisioning')
 export class MikrotikProvisioningProcessor extends WorkerHost {
@@ -12,6 +13,7 @@ export class MikrotikProvisioningProcessor extends WorkerHost {
   constructor(
     private readonly prisma: PrismaService,
     private readonly mikrotik: MikrotikAdapter,
+    private readonly notifications?: NotificationsService,
   ) {
     super();
   }
@@ -94,6 +96,9 @@ export class MikrotikProvisioningProcessor extends WorkerHost {
     if (!router) {
       await this.prisma.order.update({ where: { id: order.id }, data: { status: 'ACTIVE' } });
       this.logger.log(`Order ${order.id} marked ACTIVE without router session (voucher ${voucher?.displayCodeEnc} ready for router-sync).`);
+      try {
+        await this.notifications?.provisioningDelayed(order.venueId, order.id, 'no router paired');
+      } catch {}
       return;
     }
 
@@ -124,6 +129,17 @@ export class MikrotikProvisioningProcessor extends WorkerHost {
       // truth and stays usable via router-sync pull + portal code login.
       // Reconcile self-heals the hardware user later. Only DB errors rethrow.
       this.logger.warn(`Router push failed for ${router.endpoint}: ${err.message}. Order ${order.id} proceeds ACTIVE with cloud voucher ${voucher?.displayCodeEnc || username}.`);
+      try {
+        await this.notifications?.provisioningDelayed(order.venueId, order.id, err.message || 'router unreachable');
+      } catch {}
+    }
+
+    // Idempotent: a retried job must never duplicate sessions for one order.
+    const existingSession = await this.prisma.session.findFirst({ where: { orderId: order.id } });
+    if (existingSession) {
+      await this.prisma.order.update({ where: { id: order.id }, data: { status: 'ACTIVE' } });
+      this.logger.log(`Order ${order.id} already has session ${existingSession.id} — marked ACTIVE, no duplicate.`);
+      return;
     }
 
     await this.prisma.$transaction([
@@ -215,6 +231,17 @@ export class MikrotikProvisioningProcessor extends WorkerHost {
       this.logger.warn(`Router push failed for ${router.endpoint}: ${err.message}. Voucher ${voucher.displayCodeEnc} proceeds ACTIVE.`);
     }
 
+    // Idempotent: a retried job must never duplicate sessions for one voucher.
+    const existingVoucherSession = await this.prisma.session.findFirst({ where: { voucherId: voucher.id } });
+    if (existingVoucherSession) {
+      await this.prisma.voucher.updateMany({
+        where: { id: voucher.id, status: { in: ['ISSUED', 'GENERATED'] } },
+        data: { status: 'ACTIVE' },
+      });
+      this.logger.log(`Voucher ${voucher.id} already has session ${existingVoucherSession.id} — no duplicate.`);
+      return;
+    }
+
     await this.prisma.$transaction([
       this.prisma.session.create({
         data: {
@@ -227,7 +254,12 @@ export class MikrotikProvisioningProcessor extends WorkerHost {
           expiresAt: new Date(Date.now() + voucher.plan.durationSeconds * 1000),
         },
       }),
-      this.prisma.voucher.update({ where: { id: voucher.id }, data: { status: 'ACTIVE' } }),
+      // Only unclaimed stock flips here — first-use REDEEMED (with device
+      // binding) is owned by redeem() and must survive provisioning.
+      this.prisma.voucher.updateMany({
+        where: { id: voucher.id, status: { in: ['ISSUED', 'GENERATED'] } },
+        data: { status: 'ACTIVE' },
+      }),
     ]);
   }
 }

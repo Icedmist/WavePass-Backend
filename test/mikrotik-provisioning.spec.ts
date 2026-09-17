@@ -4,8 +4,12 @@ import { MikrotikProvisioningProcessor } from '../src/modules/mikrotik/mikrotik-
 function mockPrisma(overrides: any = {}) {
   return {
     order: { findUniqueOrThrow: vi.fn(), update: vi.fn().mockResolvedValue({}) },
-    voucher: { findUniqueOrThrow: vi.fn(), update: vi.fn().mockResolvedValue({}) },
-    session: { create: vi.fn().mockResolvedValue({}) },
+    voucher: {
+      findUniqueOrThrow: vi.fn(),
+      update: vi.fn().mockResolvedValue({}),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+    },
+    session: { create: vi.fn().mockResolvedValue({}), findFirst: vi.fn(async () => null) },
     $transaction: vi.fn(async (ops: any[]) => {
       for (const op of ops) if (typeof op?.then === 'function') await op;
       return ops;
