@@ -3,6 +3,7 @@ import { PrismaService } from '../../common/prisma.service';
 import { PaystackService } from '../paystack/paystack.service';
 import { MikrotikProvisioningQueue } from '../mikrotik/mikrotik-provisioning.queue';
 import { VenuesService } from '../venues/venues.service';
+import { CashoutsService } from '../cashouts/cashouts.service';
 
 @Injectable()
 export class AdminService implements OnModuleInit, OnModuleDestroy {
@@ -14,6 +15,7 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
     private readonly paystack: PaystackService,
     private readonly venuesService: VenuesService,
     private readonly provisioningQueue: MikrotikProvisioningQueue,
+    private readonly cashouts?: CashoutsService,
   ) {}
 
   onModuleInit() {
@@ -108,6 +110,9 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
 
   async reconcile(venueId?: string) {
     const venue = venueId ? await this.venuesService.getVenueById(venueId) : await this.venuesService.getDefaultVenue();
+    const cashoutSweep = this.cashouts
+      ? await this.cashouts.reconcileProcessing(venue.id).catch((err: any) => ({ error: err.message }))
+      : { skipped: true, reason: 'cashouts service unavailable' };
     const router = venue.routers[0];
 
     if (!router) {
@@ -117,6 +122,7 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
         mismatches: [],
         healed: [],
         orphans: [],
+        cashouts: cashoutSweep,
       };
     }
 
@@ -135,6 +141,7 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
         mismatches: [],
         healed: [],
         orphans: [],
+        cashouts: cashoutSweep,
       };
     }
 
@@ -187,6 +194,7 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
       mismatches,
       healed,
       orphans,
+      cashouts: cashoutSweep,
       message:
         mismatches.length === 0
           ? 'Reconciliation OK — all fulfilled payments have active router sessions'
@@ -791,5 +799,132 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
       message: 'Venue activated successfully! You can now set up your router.',
       code: this.toActivationView(updated),
     };
+  }
+
+  // ── Activation Code Requests ─────────────────────────────────────────────
+  // Users without a code request one from the app. The system admin sees
+  // their details and either grants a real code or direct time-boxed access.
+
+  async createActivationRequest(body: {
+    email: string; name?: string; phone?: string; venueName?: string; venueId?: string; message?: string;
+  }) {
+    const email = (body.email || '').toLowerCase().trim();
+    if (!email || !email.includes('@')) {
+      return { ok: false, error: 'A valid email address is required' };
+    }
+    const dupe = await this.prisma.activationRequest.findFirst({
+      where: { email, status: 'PENDING', venueId: body.venueId || undefined },
+    });
+    if (dupe) {
+      return { ok: true, request: dupe, duplicate: true, message: 'You already have a pending request — the admin will review it.' };
+    }
+    const request = await this.prisma.activationRequest.create({
+      data: {
+        email,
+        name: body.name?.trim() || null,
+        phone: body.phone?.trim() || null,
+        venueName: body.venueName?.trim() || null,
+        venueId: body.venueId?.trim() || null,
+        message: body.message?.trim() || null,
+      },
+    });
+    await this.logAudit({
+      action: 'ACTIVATION_REQUEST_CREATED',
+      category: 'ACTIVATION',
+      actor: email,
+      details: { requestId: request.id, venueName: request.venueName },
+    });
+    return { ok: true, request, message: 'Request sent — the system admin will review it shortly.' };
+  }
+
+  async listActivationRequests(status?: string) {
+    const rows = await this.prisma.activationRequest.findMany({
+      where: status ? { status: status as any } : {},
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    });
+    return { ok: true, count: rows.length, requests: rows };
+  }
+
+  /**
+   * Approve a request two ways:
+   *  - code: mint a real LICENSE code bound to the requester's venue.
+   *  - direct: grant time-boxed access immediately (pre-redeemed grant row).
+   */
+  async approveActivationRequest(
+    id: string,
+    opts: { reviewedBy?: string; mode?: 'code' | 'direct'; kind?: 'LICENSE' | 'MASTER' | 'TRIAL'; durationDays?: number | null; expiresAt?: string; reviewNote?: string },
+  ) {
+    const request = await this.prisma.activationRequest.findUnique({ where: { id } });
+    if (!request) return { ok: false, error: 'Request not found' };
+    if (request.status === 'GRANTED') return { ok: false, error: 'Request already granted' };
+    if (request.status === 'REJECTED') return { ok: false, error: 'Request was rejected — ask the owner to submit a new one' };
+
+    const reviewer = opts.reviewedBy || 'talk2icedmist@gmail.com';
+    const mode = opts.mode || 'code';
+
+    if (mode === 'direct') {
+      const until = opts.expiresAt ? new Date(opts.expiresAt)
+        : new Date(Date.now() + (opts.durationDays ?? 30) * 86400000);
+      const grant = await this.prisma.activationCode.create({
+        data: {
+          code: `DIRECT-${Math.random().toString(36).slice(2, 10).toUpperCase()}`,
+          status: 'USED',
+          kind: 'LICENSE',
+          createdBy: reviewer,
+          authorizedAt: new Date(),
+          redeemedBy: request.email,
+          venueId: request.venueId,
+          usedAt: new Date(),
+          quota: 1,
+          usedCount: 1,
+          expiresAt: until,
+          notes: `Direct admin grant for request ${request.id}${opts.reviewNote ? ` — ${opts.reviewNote}` : ''}`,
+        },
+      });
+      await this.prisma.activationRedemption.create({
+        data: { codeId: grant.id, email: request.email, venueId: request.venueId },
+      });
+      const updated = await this.prisma.activationRequest.update({
+        where: { id },
+        data: { status: 'GRANTED', grantedCodeId: grant.id, grantedUntil: until, reviewedBy: reviewer, reviewedAt: new Date(), reviewNote: opts.reviewNote },
+      });
+      await this.logAudit({ action: 'ACTIVATION_REQUEST_GRANTED_DIRECT', category: 'ACTIVATION', actor: reviewer, details: { requestId: id, email: request.email, until } });
+      return { ok: true, request: updated, mode: 'direct', grantedUntil: until, message: `Direct access granted until ${until.toISOString()}` };
+    }
+
+    const gen = await this.generateActivationCodes(
+      1,
+      `Granted for ${request.venueName || request.email} (request ${request.id})`,
+      1,
+      reviewer,
+      opts.expiresAt,
+      request.venueId ? [request.venueId] : undefined,
+      opts.kind || 'LICENSE',
+      opts.durationDays,
+    );
+    const updated = await this.prisma.activationRequest.update({
+      where: { id },
+      data: {
+        status: 'GRANTED',
+        grantedCodeId: gen.codes[0]?.code,
+        reviewedBy: reviewer,
+        reviewedAt: new Date(),
+        reviewNote: opts.reviewNote,
+      },
+    });
+    await this.logAudit({ action: 'ACTIVATION_REQUEST_GRANTED_CODE', category: 'ACTIVATION', actor: reviewer, details: { requestId: id, email: request.email, code: gen.codes[0]?.code } });
+    return { ok: true, request: updated, mode: 'code', code: gen.codes[0]?.code, expiresAt: gen.codes[0]?.expiresAt, message: 'Code granted — share it with the venue owner.' };
+  }
+
+  async rejectActivationRequest(id: string, opts: { reviewedBy?: string; reviewNote?: string }) {
+    const request = await this.prisma.activationRequest.findUnique({ where: { id } });
+    if (!request) return { ok: false, error: 'Request not found' };
+    const updated = await this.prisma.activationRequest.update({
+      where: { id },
+      data: { status: 'REJECTED', reviewedBy: opts.reviewedBy || 'talk2icedmist@gmail.com', reviewedAt: new Date(), reviewNote: opts.reviewNote },
+    });
+    await this.logAudit({ action: 'ACTIVATION_REQUEST_REJECTED', category: 'ACTIVATION', actor: opts.reviewedBy || 'system_admin', details: { requestId: id } });
+    return { ok: true, request: updated };
   }
 }

@@ -79,6 +79,16 @@ export class CashoutsService {
       });
     }
 
+    // Self-heal: a recipient that failed at registration time is retried here
+    // instead of failing the owner's cashout.
+    try {
+      bank = await this.ensureRecipient(bank);
+    } catch (err: any) {
+      throw new BadRequestException(
+        `Venue bank account is not registered as a Paystack transfer recipient (${err.message}).`,
+      );
+    }
+
     if (!bank.providerRecipientCode) {
       throw new BadRequestException(
         'Venue bank account has not been registered as a Paystack transfer recipient.',
@@ -125,29 +135,32 @@ export class CashoutsService {
     }
   }
 
-  /** Accumulated, usable venue balance = fulfilled payments minus pending/completed cashouts. */
-  async venueBalance(venueId: string) {
+  /** Accumulated, usable venue balance = fulfilled payments minus pending/completed cashouts.
+   *  Accepts a transaction client so balance checks can run atomically with
+   *  cashout creation under Serializable isolation (no double-spend race). */
+  async venueBalance(venueId: string, db?: any) {
+    const prisma = db || this.prisma;
     const [fulfilled, pendingCashouts, completedCashouts] = await Promise.all([
-      this.prisma.payment.aggregate({
+      prisma.payment.aggregate({
         where: {
           status: 'FULFILLED',
           order: { venueId },
         },
         _sum: { amountMinor: true },
       }),
-      this.prisma.cashout.findMany({
+      prisma.cashout.findMany({
         where: { venueId, status: { in: ['PENDING', 'APPROVED', 'CONFIRMED', 'PROCESSING'] } },
         select: { amountMinor: true },
       }),
-      this.prisma.cashout.findMany({
+      prisma.cashout.findMany({
         where: { venueId, status: 'COMPLETED' },
         select: { amountMinor: true },
       }),
     ]);
 
     const earned = fulfilled._sum.amountMinor || 0;
-    const locked = pendingCashouts.reduce((acc, c) => acc + c.amountMinor, 0);
-    const cashedOut = completedCashouts.reduce((acc, c) => acc + c.amountMinor, 0);
+    const locked = pendingCashouts.reduce((acc: number, c: { amountMinor: number }) => acc + c.amountMinor, 0);
+    const cashedOut = completedCashouts.reduce((acc: number, c: { amountMinor: number }) => acc + c.amountMinor, 0);
     const availableMinor = Math.max(0, earned - locked - cashedOut);
 
     return {
@@ -168,17 +181,25 @@ export class CashoutsService {
     if (!venue) throw new NotFoundException(`Venue ${dto.venueId} not found`);
 
     let recipientCode: string | null = null;
+    let recipientPending = false;
     if (!this.paystack.isMock()) {
-      const recipient = await this.paystack.createTransferRecipient({
-        name: dto.accountName,
-        accountNumber: dto.accountNumber,
-        bankCode: dto.bankCode,
-      });
-      recipientCode = recipient.recipient_code;
+      try {
+        const recipient = await this.paystack.createTransferRecipient({
+          name: dto.accountName,
+          accountNumber: dto.accountNumber,
+          bankCode: dto.bankCode,
+        });
+        recipientCode = recipient.recipient_code;
+      } catch (err: any) {
+        // Don't force the owner to retype the whole form on a Paystack blip —
+        // save the account and self-heal the recipient at cashout time.
+        this.logger.warn(`Transfer recipient creation failed, will retry at cashout: ${err.message}`);
+        recipientPending = true;
+      }
     }
 
     const count = await this.prisma.bankAccount.count({ where: { venueId: dto.venueId } });
-    return this.prisma.bankAccount.create({
+    const account = await this.prisma.bankAccount.create({
       data: {
         venueId: dto.venueId,
         accountName: dto.accountName,
@@ -188,6 +209,21 @@ export class CashoutsService {
         providerRecipientCode: recipientCode,
         isDefault: count === 0,
       },
+    });
+    return { ...account, recipientPending };
+  }
+
+  /** Creates the Paystack transfer recipient on demand if a previous attempt failed. */
+  private async ensureRecipient(bank: any) {
+    if (bank.providerRecipientCode || this.paystack.isMock()) return bank;
+    const recipient = await this.paystack.createTransferRecipient({
+      name: bank.accountName,
+      accountNumber: bank.accountNumber,
+      bankCode: bank.bankCode,
+    });
+    return this.prisma.bankAccount.update({
+      where: { id: bank.id },
+      data: { providerRecipientCode: recipient.recipient_code },
     });
   }
 
@@ -206,11 +242,13 @@ export class CashoutsService {
     const venue = await this.prisma.venue.findUnique({ where: { id: dto.venueId } });
     if (!venue) throw new NotFoundException(`Venue ${dto.venueId} not found`);
 
-    const balance = await this.venueBalance(dto.venueId);
-    if (dto.amountMinor > balance.availableMinor) {
-      throw new BadRequestException(
-        `Insufficient available balance (available ${balance.availableMinor} kobo)`,
-      );
+    // Idempotent replay: same client key returns the original cashout.
+    if (dto.clientReference) {
+      const prior = await this.prisma.cashout.findUnique({
+        where: { clientReference: dto.clientReference },
+        include: { bankAccount: true },
+      });
+      if (prior) return prior;
     }
 
     const bankAccount = await this.prisma.bankAccount.findFirst({
@@ -222,19 +260,47 @@ export class CashoutsService {
       );
     }
 
-    // Auto-cashout: create as CONFIRMED/PROCESSING and execute immediately —
-    // the owner's password + sufficient balance is the only gate.
-    const cashout = await this.prisma.cashout.create({
-      data: {
-        venueId: dto.venueId,
-        bankAccountId: bankAccount.id,
-        amountMinor: dto.amountMinor,
-        status: 'CONFIRMED',
-        confirmedAt: new Date(),
-        reviewedAt: new Date(),
-      },
-      include: { bankAccount: true },
-    });
+    // Balance check + creation run atomically under Serializable isolation so
+    // concurrent double-taps cannot overdraw the venue (one retry on conflict).
+    let cashout: any = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        cashout = await this.prisma.$transaction(async (tx) => {
+          const balance = await this.venueBalance(dto.venueId, tx);
+          if (dto.amountMinor > balance.availableMinor) {
+            throw new BadRequestException(
+              `Insufficient available balance (available ${balance.availableMinor} kobo)`,
+            );
+          }
+          // Auto-cashout: create as CONFIRMED and execute immediately —
+          // the owner's password + sufficient balance is the only gate.
+          return tx.cashout.create({
+            data: {
+              venueId: dto.venueId,
+              bankAccountId: bankAccount.id,
+              amountMinor: dto.amountMinor,
+              status: 'CONFIRMED',
+              clientReference: dto.clientReference,
+              confirmedAt: new Date(),
+              reviewedAt: new Date(),
+            },
+            include: { bankAccount: true },
+          });
+        }, { isolationLevel: 'Serializable' } as any);
+        break;
+      } catch (err: any) {
+        if (err.code === 'P2034' && attempt === 0) continue; // serialization conflict — retry once
+        if (err.code === 'P2002' && dto.clientReference) {
+          // Lost the idempotency race — return the winner's row.
+          const winner = await this.prisma.cashout.findUnique({
+            where: { clientReference: dto.clientReference },
+            include: { bankAccount: true },
+          });
+          if (winner) return winner;
+        }
+        throw err;
+      }
+    }
 
     return this.executeTransfer(cashout, bankAccount);
   }
@@ -292,5 +358,54 @@ export class CashoutsService {
       include: { bankAccount: true },
       orderBy: { createdAt: 'desc' },
     });
+  }
+
+  /**
+   * Finalizes cashouts stuck in PROCESSING (verify call failed at payout
+   * time). Called from admin reconcile and safe to run on a schedule.
+   */
+  async reconcileProcessing(venueId?: string) {
+    const stuck = await this.prisma.cashout.findMany({
+      where: { status: 'PROCESSING', ...(venueId ? { venueId } : {}) },
+      include: { bankAccount: true },
+    });
+    const finalized: any[] = [];
+    let skipped = 0;
+    for (const c of stuck) {
+      if (!c.providerTransferCode || c.providerTransferCode.startsWith('mock_')) {
+        continue; // mock rows complete inline; nothing to verify
+      }
+      if (this.paystack.isMock()) {
+        skipped++;
+        continue;
+      }
+      try {
+        const verify = await this.paystack.verifyTransfer(c.providerTransferCode);
+        const finalStatus =
+          verify.data.status === 'success'
+            ? 'COMPLETED'
+            : verify.data.status === 'failed'
+            ? 'FAILED'
+            : c.status;
+        if (finalStatus === c.status) {
+          skipped++;
+          continue;
+        }
+        finalized.push(
+          await this.prisma.cashout.update({
+            where: { id: c.id },
+            data: {
+              status: finalStatus,
+              ...(finalStatus === 'COMPLETED' ? { completedAt: new Date() } : {}),
+              ...(finalStatus === 'FAILED' ? { failedAt: new Date(), failureReason: verify.data.status } : {}),
+            },
+          }),
+        );
+      } catch (err: any) {
+        this.logger.warn(`Reconcile skipped ${c.id}: ${err.message}`);
+        skipped++;
+      }
+    }
+    return { checked: stuck.length, finalized: finalized.length, skipped };
   }
 }

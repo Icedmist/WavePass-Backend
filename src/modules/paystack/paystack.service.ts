@@ -41,6 +41,7 @@ export class PaystackService {
         metadata: params.metadata,
         callback_url: params.callbackUrl,
       }),
+      signal: AbortSignal.timeout(20000),
     });
 
     const data: any = await res.json().catch(() => null);
@@ -55,7 +56,7 @@ export class PaystackService {
   async verifyTransaction(reference: string): Promise<PaystackVerifyResponse> {
     const res = await fetch(
       `${this.baseUrl}/transaction/verify/${encodeURIComponent(reference)}`,
-      { headers: { Authorization: `Bearer ${this.secretKey}` } },
+      { headers: { Authorization: `Bearer ${this.secretKey}` }, signal: AbortSignal.timeout(20000) },
     );
     if (!res.ok) {
       throw new InternalServerErrorException('Paystack verify failed');
@@ -92,6 +93,7 @@ export class PaystackService {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(20000),
     });
     if (!res.ok) {
       throw new InternalServerErrorException(
@@ -104,6 +106,7 @@ export class PaystackService {
   private async get<T = any>(path: string): Promise<T> {
     const res = await fetch(`${this.baseUrl}${path}`, {
       headers: { Authorization: `Bearer ${this.secretKey}` },
+      signal: AbortSignal.timeout(20000),
     });
     if (!res.ok) {
       throw new InternalServerErrorException(

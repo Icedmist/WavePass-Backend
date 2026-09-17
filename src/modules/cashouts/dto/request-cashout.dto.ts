@@ -21,4 +21,10 @@ export class RequestCashoutDto {
   @IsOptional()
   @IsString()
   reason?: string;
+
+  /** Client-generated idempotency key (uuid). Retried submissions with the
+   *  same key return the original cashout instead of double-paying. */
+  @IsOptional()
+  @IsString()
+  clientReference?: string;
 }

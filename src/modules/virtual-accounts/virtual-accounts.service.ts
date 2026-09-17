@@ -45,10 +45,12 @@ export class VirtualAccountsService {
     return `venue.${slug || 'wavepass'}@nexawavepass.com`;
   }
 
-  /** Ensure a DVA exists for a venue — idempotent. */
+  /** Ensure a DVA exists for a venue — idempotent and race-safe. PENDING rows
+   *  from earlier failed attempts are retried instead of returned forever. */
   async ensureForVenue(venueId: string, opts?: { email?: string; preferredBank?: string }) {
     const existing = await this.prisma.virtualAccount.findUnique({ where: { venueId } });
-    if (existing) return existing;
+    if (existing && existing.status === 'ACTIVE') return existing;
+    if (existing && this.paystack.isMock()) return existing;
 
     const venue = await this.venuesService.getVenueById(venueId);
     if (this.paystack.isMock()) {
@@ -87,22 +89,11 @@ export class VirtualAccountsService {
     }
 
     if (!dva || !dva.account_number) {
-      return this.prisma.virtualAccount.create({
-        data: {
-          venueId: venue.id,
-          customerCode: customer.customer_code,
-          accountNumber: 'PENDING',
-          accountName: venue.name,
-          bankName: 'Paystack Dedicated NUBAN (Pending)',
-          status: 'PENDING',
-          metadata: { note: 'DVA pending activation or KYC on Paystack' },
-        },
-      });
+      return this.upsertPending(venue.id, venue.name, customer.customer_code);
     }
 
-    return this.prisma.virtualAccount.create({
-      data: {
-        venueId: venue.id,
+    try {
+      return await this.upsertActive(venue.id, {
         customerCode: customer.customer_code,
         accountNumber: String(dva.account_number),
         accountName: dva.account_name || venue.name,
@@ -110,8 +101,14 @@ export class VirtualAccountsService {
         splitCode: (dva as any).split_code || undefined,
         status: 'ACTIVE',
         metadata: { providerId: dva.id },
-      },
-    });
+      });
+    } catch (err: any) {
+      if (err.code === 'P2002') {
+        // Lost a create race — return the winner's row.
+        return this.prisma.virtualAccount.findUniqueOrThrow({ where: { venueId: venue.id } });
+      }
+      throw err;
+    }
   }
 
   /** Signed-in cash-pass sellers can top-up a venue's DVA on the app admin panel. */
@@ -126,19 +123,58 @@ export class VirtualAccountsService {
     });
   }
 
+  /** PENDING placeholder that later retries overwrite via upsertActive. */
+  private async upsertPending(venueId: string, venueName: string, customerCode: string) {
+    try {
+      return await this.prisma.virtualAccount.create({
+        data: {
+          venueId,
+          customerCode,
+          accountNumber: 'PENDING',
+          accountName: venueName,
+          bankName: 'Paystack Dedicated NUBAN (Pending)',
+          status: 'PENDING',
+          metadata: { note: 'DVA pending activation or KYC on Paystack' },
+        },
+      });
+    } catch (err: any) {
+      if (err.code === 'P2002') {
+        return this.prisma.virtualAccount.findUniqueOrThrow({ where: { venueId } });
+      }
+      throw err;
+    }
+  }
+
+  private async upsertActive(venueId: string, data: any) {
+    try {
+      return await this.prisma.virtualAccount.create({ data: { venueId, ...data } });
+    } catch (err: any) {
+      if (err.code !== 'P2002') throw err;
+      // A PENDING row (or a racer's row) already exists — upgrade it in place.
+      return this.prisma.virtualAccount.update({ where: { venueId }, data });
+    }
+  }
+
   private async createMock(venueId: string, venueName: string) {
     const mockAccountNumber = `9${String(Math.floor(100000000 + Math.random() * 900000000))}`;
     const existing = await this.prisma.virtualAccount.findUnique({ where: { venueId } });
     if (existing) return existing;
-    return this.prisma.virtualAccount.create({
-      data: {
-        venueId,
-        accountNumber: mockAccountNumber,
-        accountName: venueName,
-        bankName: 'Wema Bank (mock)',
-        status: 'ACTIVE',
-        metadata: { mock: true },
-      },
-    });
+    try {
+      return await this.prisma.virtualAccount.create({
+        data: {
+          venueId,
+          accountNumber: mockAccountNumber,
+          accountName: venueName,
+          bankName: 'Wema Bank (mock)',
+          status: 'ACTIVE',
+          metadata: { mock: true },
+        },
+      });
+    } catch (err: any) {
+      if (err.code === 'P2002') {
+        return this.prisma.virtualAccount.findUniqueOrThrow({ where: { venueId } });
+      }
+      throw err;
+    }
   }
 }
