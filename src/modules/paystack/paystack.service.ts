@@ -25,7 +25,9 @@ interface PaystackVerifyResponse {
 @Injectable()
 export class PaystackService {
   private readonly baseUrl = 'https://api.paystack.co';
-  private readonly secretKey = process.env.PAYSTACK_SECRET_KEY as string;
+  private get secretKey(): string {
+    return (process.env.PAYSTACK_SECRET_KEY || '').trim();
+  }
 
   async initializeTransaction(params: InitializeParams) {
     const res = await fetch(`${this.baseUrl}/transaction/initialize`, {
@@ -67,7 +69,7 @@ export class PaystackService {
   /** HMAC SHA512 of the *raw* request body, compared with x-paystack-signature. */
   verifyWebhookSignature(rawBody: Buffer, signatureHeader: string | undefined): boolean {
     if (!signatureHeader) return false;
-    const expected = createHmac('sha512', process.env.PAYSTACK_SECRET_KEY as string)
+    const expected = createHmac('sha512', this.secretKey)
       .update(rawBody)
       .digest('hex');
     const a = Buffer.from(expected, 'utf8');
@@ -78,7 +80,7 @@ export class PaystackService {
 
   /** Whether the platform is running against a real Paystack key or the local mock. */
   isMock(): boolean {
-    const secret = process.env.PAYSTACK_SECRET_KEY || '';
+    const secret = (process.env.PAYSTACK_SECRET_KEY || '').trim();
     if (!secret || secret === 'mock' || secret === 'placeholder' || secret.includes('xxx') || secret.startsWith('mock_')) {
       return true;
     }
