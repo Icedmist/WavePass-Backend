@@ -140,4 +140,9 @@
 - [x] **Verification**: `tsc` clean; 48/48 vitest pass.
 - [x] PR [#41](https://github.com/Icedmist/WavePass-Backend/pull/41) merged to `main`.
 
+### 21. Missing Request Spec + Full Builds (Issue #42, PR #43)
+- [x] **Found**: activation-request spec block was verified locally but never committed, plus two whitespace manglings.
+- [x] **Sweep**: `nest build` clean; web `next build` 24/24 routes; all mains synced; zero open issues.
+- [x] PR [#43](https://github.com/Icedmist/WavePass-Backend/pull/43) merged to `main`.
+
 
