@@ -13,6 +13,12 @@ export class CashoutsController {
     return this.cashouts.venueBalance(venueId);
   }
 
+  @Get('payments/:venueId')
+  payments(@Param('venueId') venueId: string, @Query('limit') limit?: string) {
+    const take = limit ? parseInt(limit, 10) : 50;
+    return this.cashouts.listPaymentsByVenue(venueId, take);
+  }
+
   @Post('bank-accounts')
   registerBank(
     @Body(new ValidationPipe({ whitelist: true, transform: true })) dto: RegisterBankAccountDto,

@@ -360,6 +360,37 @@ export class CashoutsService {
     });
   }
 
+  async listPaymentsByVenue(venueId: string, limit = 50) {
+    const payments = await this.prisma.payment.findMany({
+      where: {
+        status: 'FULFILLED',
+        order: { venueId },
+      },
+      include: {
+        order: {
+          include: {
+            plan: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+    return payments.map((p) => ({
+      id: p.id,
+      amountMinor: p.amountMinor,
+      amountNGN: p.amountMinor / 100,
+      status: p.status,
+      provider: p.provider,
+      providerReference: p.providerReference,
+      channel: p.channel,
+      paidAt: p.paidAt,
+      createdAt: p.createdAt,
+      planName: p.order?.plan?.name || 'Wi-Fi Pass',
+      customerRef: p.order?.customerRef || null,
+    }));
+  }
+
   /**
    * Finalizes cashouts stuck in PROCESSING (verify call failed at payout
    * time). Called from admin reconcile and safe to run on a schedule.
