@@ -168,4 +168,10 @@
 - [x] **Verification**: `tsc` clean; 61/61 vitest pass.
 - [x] PR [#51](https://github.com/Icedmist/WavePass-Backend/pull/51) merged to `main`.
 
+### 26. Idempotent Approval (Issue #52, PR #53)
+- [x] **Bug**: approve retries/double-taps minted duplicate payments + vouchers; failures died silently with no user feedback.
+- [x] **Fix**: re-approval returns the existing voucher with alreadyApproved flag; approval binds guaranteed-valid MAC.
+- [x] **Verification**: `tsc` clean; 62/62 vitest pass.
+- [x] PR [#53](https://github.com/Icedmist/WavePass-Backend/pull/53) merged to `main`.
+
 
