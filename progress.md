@@ -135,4 +135,9 @@
 - [x] **Verification**: `tsc` clean; 46/46 vitest pass.
 - [x] PR [#39](https://github.com/Icedmist/WavePass-Backend/pull/39) merged to `main`.
 
+### 20. Venue Sales Funnel (Issue #40, PR #41)
+- [x] `GET /admin/funnel` aggregates orders/payments/vouchers per venue (7–90d): initiated/awaiting/active/failed, revenue, redeem + paid rates, per-day series.
+- [x] **Verification**: `tsc` clean; 48/48 vitest pass.
+- [x] PR [#41](https://github.com/Icedmist/WavePass-Backend/pull/41) merged to `main`.
+
 
