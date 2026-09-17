@@ -182,3 +182,59 @@ curl -s https://api.nexawavepass.com/api/v1/routers/[ROUTER_ID]/provision.rsc
 | `GET` | `/api/v1/admin/stats` | Live revenue, ARPU, plan sales, and session stats |
 | `POST` | `/api/v1/admin/reconcile` | Self-healing session reconciliation |
 | `POST` | `/api/v1/admin/cleanup` | Delete expired users on RouterOS |
+| `GET` | `/api/v1/vouchers/check/:code` | Non-consuming voucher existence check |
+| `POST` | `/api/v1/portal/transfer-request` | Guest bank-transfer request (owner approval) |
+| `POST` | `/api/v1/portal/approve-access` | Owner approval → voucher + provisioning (idempotent) |
+| `GET` | `/api/v1/portal/retrieve-voucher?mac=` | Guest voucher lookup by device MAC |
+| `GET` | `/api/v1/portal/router-sync` | RouterOS pull script for offline routers |
+| `GET` | `/api/v1/portal/active-session?mac=&reference=` | Paid/access status incl. reference lookup |
+| `GET` | `/api/v1/venues/:id/readiness` | New-venue setup gate (plans + router) |
+| `GET` | `/api/v1/notifications?venueId=` | Owner payment alerts (poll-based) |
+| `GET` | `/api/v1/admin/activation-codes` | List activation codes (kinds, expiry) |
+| `POST` | `/api/v1/admin/activation-codes/generate` | Monthly batch: kind + durationDays + venueIds |
+| `POST` | `/api/v1/admin/activation-codes/redeem` | Redeem code (quota + venue binding enforced) |
+| `POST` | `/api/v1/admin/activation-requests` | Codeless user requests a code |
+| `GET` | `/api/v1/admin/activation-requests` | Review requests |
+| `POST` | `/api/v1/admin/activation-requests/:id/approve` | Grant code or direct time-boxed access |
+| `GET` | `/api/v1/admin/funnel?venueId=&days=` | Sales funnel: initiated → paid → active + revenue |
+| `GET` | `/api/v1/admin/review-queue?venueId=` | Refund-required, stuck, failed, reversed cases |
+| `GET` | `/api/v1/admin/metrics?days=` | Payment/webhook/provisioning rates, latency, DVAs |
+
+---
+
+## ✅ Setup, Verification & Deployment
+
+```bash
+# Install
+pnpm install
+
+# Generate Prisma client
+npx prisma generate
+
+# Verify (must be clean before any PR)
+npx tsc --noEmit
+npm test          # vitest suite
+
+# Build
+npm run build     # nest build -> dist/
+```
+
+### Environment (`.env` — names only, never commit values)
+```ini
+DATABASE_URL=...                     # Supabase pooled connection
+DIRECT_DATABASE_URL=...              # Supabase direct connection (migrations)
+REDIS_URL=...
+PAYSTACK_SECRET_KEY=...              # live key; mock/placeholder/xxx => mock mode
+FRONTEND_URL=...
+JWT_SECRET=...
+ADMIN_PASSWORD=...
+OWNER_CASHOUT_PASSWORD=...
+MIKROTIK_API_USER=...
+MIKROTIK_API_PASS=...
+```
+
+### Deploy notes
+- Run `npx prisma migrate deploy` on every release (Notification, ActivationCode/Kind/Redemption/Request, Cashout.clientReference tables).
+- Webhook needs a public HTTPS URL; Paystack signs with `PAYSTACK_SECRET_KEY` (HMAC-SHA512 over raw body).
+- Fulfilment survives Redis outages via webhook-ledger requeue; provisioning degrades to cloud vouchers when routers are offline (router-sync + reconcile heal hardware later).
+- See `progress.md` for the milestone log and `AGENT_WORKFLOW.md` for the mandatory issue → branch → PR → merge lifecycle.
