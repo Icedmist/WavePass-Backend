@@ -670,51 +670,42 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
     }
 
     await this.sweepExpiredCodes();
-    const match = await this.prisma.activationCode.findFirst({
+    // Redemption ledger is the source of truth: every redeemer keeps their own
+    // grant even after a multi-use MASTER code is fully consumed by others.
+    const redemption = await this.prisma.activationRedemption.findFirst({
+      where: { email: cleanEmail },
+      include: { code: true },
+      orderBy: { redeemedAt: 'desc' },
+    });
+    const row = (redemption?.code as any) || await this.prisma.activationCode.findFirst({
       where: { status: 'USED', redeemedBy: cleanEmail },
       orderBy: { usedAt: 'desc' },
     });
-    if (match) {
-      if (this.isExpired(match)) {
-        return {
-          ok: true,
-          activated: false,
-          expired: true,
-          code: match.code,
-          kind: (match as any).kind || 'LICENSE',
-          venueId: match.venueId,
-          usedAt: match.usedAt,
-          expiresAt: match.expiresAt,
-        };
-      }
+    if (!row) {
+      return { ok: true, activated: false };
+    }
+    if (row.status === 'REVOKED' || this.isExpired(row)) {
       return {
         ok: true,
-        activated: true,
-        code: match.code,
-        kind: (match as any).kind || 'LICENSE',
-        venueId: match.venueId,
-        usedAt: match.usedAt,
-        expiresAt: match.expiresAt,
+        activated: false,
+        expired: this.isExpired(row),
+        code: row.code,
+        kind: row.kind || 'LICENSE',
+        venueId: row.venueId,
+        usedAt: row.usedAt,
+        expiresAt: row.expiresAt,
       };
     }
-    // MASTER codes stay AUTHORIZED across multiple redeems — an active
-    // multi-use grant counts as activation until quota/expiry.
-    const master = await this.prisma.activationCode.findFirst({
-      where: { kind: 'MASTER', redeemedBy: cleanEmail, status: 'AUTHORIZED' },
-      orderBy: { usedAt: 'desc' },
-    });
-    if (master && !this.isExpired(master) && (master.usedCount || 0) > 0 && (master.usedCount || 0) < master.quota) {
-      return {
-        ok: true,
-        activated: true,
-        code: master.code,
-        kind: 'MASTER',
-        venueId: master.venueId,
-        usedAt: master.usedAt,
-        expiresAt: master.expiresAt,
-      };
-    }
-    return { ok: true, activated: false };
+
+    return {
+      ok: true,
+      activated: true,
+      code: row.code,
+      kind: row.kind || 'LICENSE',
+      venueId: row.venueId,
+      usedAt: row.usedAt,
+      expiresAt: row.expiresAt,
+    };
   }
 
   async redeemActivationCode(code: string, email: string, venueId?: string) {
@@ -762,9 +753,20 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
     }
 
     // MASTER codes are multi-use: consume one quota unit, stay AUTHORIZED
-    // until the quota is exhausted.
+    // until the quota is exhausted. Each redeemer gets their own ledger row
+    // so earlier redeemers keep activation after later ones consume quota.
     const isMaster = (item as any).kind === 'MASTER';
     const nextUsed = (item.usedCount || 0) + 1;
+    try {
+      await this.prisma.activationRedemption.create({
+        data: { codeId: item.id, email: cleanEmail, venueId: venueId || item.venueId },
+      });
+    } catch (err: any) {
+      if (err.code === 'P2002') {
+        return { ok: false, error: 'This account has already redeemed this code' };
+      }
+      throw err;
+    }
     const updated = await this.prisma.activationCode.update({
       where: { code: cleanCode },
       data: {
