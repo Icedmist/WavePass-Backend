@@ -754,7 +754,27 @@ export class PortalService {
     if (orderMac !== mac) {
       await this.prisma.order.update({ where: { id: order.id }, data: { customerRef: mac } });
     }
-    const isMac = true;
+
+    // Idempotent re-approval: a retry/double-tap returns the existing voucher
+    // instead of minting duplicates.
+    const priorPayment = await this.prisma.payment.findUnique({
+      where: { orderId: order.id },
+      include: { vouchers: true },
+    });
+    if (priorPayment?.status === 'FULFILLED' && priorPayment.vouchers.length > 0) {
+      const prior = priorPayment.vouchers[0];
+      this.logger.log(`Duplicate approval for order ${order.id} — returning existing voucher.`);
+      return {
+        ok: true,
+        alreadyApproved: true,
+        voucherCode: prior.displayCodeEnc,
+        mac,
+        planName: order.plan?.name,
+        durationSeconds: order.plan?.durationSeconds || 3600,
+        expiresAt: prior.expiresAt,
+        message: 'Access was already approved — showing existing voucher.',
+      };
+    }
     const durationSeconds = order.plan?.durationSeconds || 3600;
     const expiresAt = new Date(Date.now() + durationSeconds * 1000);
 
@@ -785,8 +805,8 @@ export class PortalService {
             issuedAt: new Date(),
             redeemedAt: new Date(),
             expiresAt,
-            redeemedMac: isMac ? mac : null,
-            redeemedDeviceId: isMac ? mac : null,
+            redeemedMac: mac,
+            redeemedDeviceId: mac,
             createdBy: 'bank_transfer_approval',
           },
         });

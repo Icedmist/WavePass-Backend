@@ -28,9 +28,11 @@ function mockPrisma(orderRef: string) {
       findFirst: vi.fn(async () => null),
       update: vi.fn(async ({ where, data }: any) => { updatedOrders.push({ where, data }); return {}; }),
     },
-    payment: { create: vi.fn(async ({ data }: any) => ({ id: 'pay-1', ...data })) },
-    voucher: {
-      create: vi.fn(async ({ data }: any) => { createdVouchers.push(data); return { id: 'v-1', ...data }; }),
+    payment: {
+      findUnique: vi.fn(async () => null),
+      create: vi.fn(async ({ data }: any) => ({ id: 'pay-1', ...data })),
+    },
+    voucher: {      create: vi.fn(async ({ data }: any) => { createdVouchers.push(data); return { id: 'v-1', ...data }; }),
     },
   };
   return { prisma, createdVouchers, updatedOrders };
@@ -71,5 +73,40 @@ describe('PortalService.approveAccess MAC binding', () => {
     await expect(
       svc.submitTransferRequest({ venueSlug: 'venue-1', mac: '', planId: 'plan-1' } as any),
     ).rejects.toThrow('Valid device MAC required');
+  });
+
+  it('re-approval returns the existing voucher without duplicates', async () => {
+    const createdPayments: any[] = [];
+    const createdVouchers: any[] = [];
+    const existingVoucher = {
+      id: 'v-old', displayCodeEnc: '111111', expiresAt: new Date(Date.now() + 3600000),
+    };
+    const prisma: any = {
+      order: {
+        findUnique: vi.fn(async () => ({
+          id: 'order-1', venueId: 'venue-1', planId: 'plan-1',
+          customerRef: 'AA:BB:CC:DD:EE:FF', amountMinor: 50000,
+          plan: { durationSeconds: 3600, name: '1 Hour' }, venue: { id: 'venue-1' },
+        })),
+        findFirst: vi.fn(async () => null),
+        update: vi.fn(async () => ({})),
+      },
+      payment: {
+        findUnique: vi.fn(async () => ({
+          id: 'pay-old', status: 'FULFILLED', vouchers: [existingVoucher],
+        })),
+        create: vi.fn(async ({ data }: any) => { createdPayments.push(data); return { id: 'pay-new', ...data }; }),
+      },
+      voucher: {
+        create: vi.fn(async ({ data }: any) => { createdVouchers.push(data); return { id: 'v-new', ...data }; }),
+      },
+    };
+    const svc = makeService(prisma);
+    const res: any = await svc.approveAccess({ venueId: 'venue-1', orderId: 'order-1', mac: 'AA:BB:CC:DD:EE:FF' });
+    expect(res.ok).toBe(true);
+    expect(res.alreadyApproved).toBe(true);
+    expect(res.voucherCode).toBe('111111');
+    expect(createdPayments.length).toBe(0);
+    expect(createdVouchers.length).toBe(0);
   });
 });
