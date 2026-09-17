@@ -127,4 +127,12 @@
 - [x] **Verification**: `tsc` clean; 39/39 vitest pass.
 - [x] PR [#37](https://github.com/Icedmist/WavePass-Backend/pull/37) merged to `main`.
 
+### 19. Payout Hardening & Activation Requests (Issue #38, PR #39)
+- [x] **PROCESSING Sweep**: stuck transfers re-verified in admin reconcile (COMPLETED/FAILED, network blips skipped).
+- [x] **Recipient Self-Heal**: registration saves with `recipientPending` on Paystack blips; cashout retries recipient creation instead of failing.
+- [x] **Timeouts & Races**: 20s Paystack fetch timeouts; race-safe DVA create + PENDING retry/upgrade; Serializable balance check with retry; `clientReference` idempotency (+migration).
+- [x] **Code Requests**: `ActivationRequest` model/migration; request, list, approve-as-code (kind+duration, venue-bound), approve-as-direct (pre-redeemed time-boxed grant), reject.
+- [x] **Verification**: `tsc` clean; 46/46 vitest pass.
+- [x] PR [#39](https://github.com/Icedmist/WavePass-Backend/pull/39) merged to `main`.
+
 
