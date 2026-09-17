@@ -233,3 +233,98 @@ describe('AdminService Activation Codes (persistent, expiring)', () => {
     expect(health.memory).toHaveProperty('rssMB');
   });
 });
+
+describe('AdminService Activation Requests', () => {
+  function mockPrisma() {
+    const requests = new Map<string, any>();
+    const codes = new Map<string, any>();
+    const ledger: any[] = [];
+    let n = 0;
+    return {
+      activationRequest: {
+        findFirst: vi.fn(async ({ where }: any) => {
+          for (const r of requests.values()) {
+            if (where.email && r.email !== where.email) continue;
+            if (where.status && r.status !== where.status) continue;
+            if (where.venueId && r.venueId !== where.venueId) continue;
+            return r;
+          }
+          return null;
+        }),
+        findUnique: vi.fn(async ({ where }: any) => requests.get(where.id) || null),
+        findMany: vi.fn(async () => [...requests.values()]),
+        create: vi.fn(async ({ data }: any) => {
+          const row = { id: `req-${++n}`, status: 'PENDING', createdAt: new Date(), ...data };
+          requests.set(row.id, row);
+          return row;
+        }),
+        update: vi.fn(async ({ where, data }: any) => {
+          const row = { ...requests.get(where.id), ...data };
+          requests.set(where.id, row);
+          return row;
+        }),
+      },
+      activationCode: {
+        create: vi.fn(async ({ data }: any) => {
+          const row = { id: `ac-${++n}`, createdAt: new Date(), ...data };
+          codes.set(row.code, row);
+          return row;
+        }),
+      },
+      activationRedemption: {
+        create: vi.fn(async ({ data }: any) => {
+          const row = { id: `ar-${++n}`, redeemedAt: new Date(), ...data };
+          ledger.push(row);
+          return row;
+        }),
+      },
+    } as any;
+  }
+
+  it('creates requests, dedupes pendings, grants code or direct access', async () => {
+    const prisma = mockPrisma();
+    const svc = new AdminService(prisma, {} as any, {} as any, {} as any);
+
+    const bad = await svc.createActivationRequest({ email: 'nope' });
+    expect(bad.ok).toBe(false);
+
+    const created: any = await svc.createActivationRequest({
+      email: 'owner@venue.com', name: 'Owner', phone: '0801', venueName: 'Cafe', message: 'Need code',
+    });
+    expect(created.ok).toBe(true);
+    expect(created.request.status).toBe('PENDING');
+
+    const dupe: any = await svc.createActivationRequest({ email: 'owner@venue.com' });
+    expect(dupe.duplicate).toBe(true);
+
+    const list: any = await svc.listActivationRequests('PENDING');
+    expect(list.count).toBe(1);
+
+    // Grant a real code
+    const granted: any = await svc.approveActivationRequest(created.request.id, {
+      reviewedBy: 'talk2icedmist@gmail.com', mode: 'code', kind: 'LICENSE', durationDays: 30,
+    });
+    expect(granted.ok).toBe(true);
+    expect(granted.mode).toBe('code');
+    expect(granted.code).toMatch(/^WP-ACT-/);
+
+    // Second grant attempt refused
+    const again: any = await svc.approveActivationRequest(created.request.id, { mode: 'code' });
+    expect(again.ok).toBe(false);
+
+    // Direct time-boxed access on a fresh request
+    const created2: any = await svc.createActivationRequest({ email: 'owner2@venue.com', venueName: 'Bar' });
+    const direct: any = await svc.approveActivationRequest(created2.request.id, {
+      reviewedBy: 'talk2icedmist@gmail.com', mode: 'direct', durationDays: 14,
+    });
+    expect(direct.ok).toBe(true);
+    expect(direct.mode).toBe('direct');
+    expect(new Date(direct.grantedUntil).getTime()).toBeGreaterThan(Date.now());
+
+    // Reject path
+    const created3: any = await svc.createActivationRequest({ email: 'spam@x.com' });
+    const rejected: any = await svc.rejectActivationRequest(created3.request.id, { reviewNote: 'spam' });
+    expect(rejected.ok).toBe(true);
+    expect(rejected.request.status).toBe('REJECTED');
+  });
+});
