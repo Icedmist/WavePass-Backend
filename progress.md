@@ -162,4 +162,10 @@
 - [x] **Verification**: `tsc` clean; 55/55 vitest pass.
 - [x] PR [#49](https://github.com/Icedmist/WavePass-Backend/pull/49) merged to `main`.
 
+### 25. Custom Codes Honored in Cloud Batches (Issue #50, PR #51)
+- [x] **Bug**: batches ignored the app's customCode and stored random codes — cloud never matched app/router, so portal redeem missed.
+- [x] **Fix**: customCode/customCodes stored verbatim; single collision → 409; bulk conflicts reported; re-uploads idempotent; new GET /vouchers/check/:code.
+- [x] **Verification**: `tsc` clean; 61/61 vitest pass.
+- [x] PR [#51](https://github.com/Icedmist/WavePass-Backend/pull/51) merged to `main`.
+
 
