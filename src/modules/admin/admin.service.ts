@@ -480,6 +480,84 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  /**
+   * Venue sales funnel: initiated checkouts -> paid -> active access, plus
+   * voucher issuance -> redemption and per-day revenue for the window.
+   */
+  async getFunnel(venueId?: string, days = 7) {
+    const windowDays = Math.min(Math.max(days || 7, 1), 90);
+    const since = new Date(Date.now() - windowDays * 86400000);
+    const venue = venueId ? await this.venuesService.getVenueById(venueId) : await this.venuesService.getDefaultVenue();
+    const vid = venue.id;
+
+    const [orderGroups, payments, voucherGroups, recentOrders] = await Promise.all([
+      this.prisma.order.groupBy({
+        by: ['status'],
+        where: { venueId: vid, createdAt: { gte: since } },
+        _count: { status: true },
+      }),
+      this.prisma.payment.findMany({
+        where: { status: 'FULFILLED', paidAt: { gte: since }, order: { venueId: vid } },
+        select: { amountMinor: true, paidAt: true },
+      }),
+      this.prisma.voucher.groupBy({
+        by: ['status'],
+        where: { venueId: vid, issuedAt: { gte: since } },
+        _count: { status: true },
+      }),
+      this.prisma.order.findMany({
+        where: { venueId: vid, createdAt: { gte: since } },
+        select: { createdAt: true },
+      }),
+    ]);
+
+    const countOf = (groups: any[], status: string) =>
+      groups.find((g) => g.status === status)?._count?.status || 0;
+    const initiated = orderGroups.reduce((a: number, g: any) => a + (g._count?.status || 0), 0);
+    const awaiting = countOf(orderGroups, 'AWAITING_PAYMENT') + countOf(orderGroups, 'CREATED');
+    const active = countOf(orderGroups, 'ACTIVE') + countOf(orderGroups, 'COMPLETED');
+    const failed =
+      countOf(orderGroups, 'PAYMENT_FAILED') +
+      countOf(orderGroups, 'PROVISIONING_FAILED') +
+      countOf(orderGroups, 'REFUND_REQUIRED');
+    const paid = payments.length;
+    const revenueMinor = payments.reduce((a: number, p: any) => a + (p.amountMinor || 0), 0);
+
+    const issued = voucherGroups.reduce((a: number, g: any) => a + (g._count?.status || 0), 0);
+    const redeemed =
+      countOf(voucherGroups, 'REDEEMED') + countOf(voucherGroups, 'ACTIVE') + countOf(voucherGroups, 'CONSUMED');
+
+    const dayKey = (d: Date) => d.toISOString().slice(0, 10);
+    const dailyMap = new Map<string, { date: string; orders: number; revenueMinor: number }>();
+    for (let i = windowDays - 1; i >= 0; i--) {
+      const key = dayKey(new Date(Date.now() - i * 86400000));
+      dailyMap.set(key, { date: key, orders: 0, revenueMinor: 0 });
+    }
+    for (const o of recentOrders) {
+      const slot = dailyMap.get(dayKey(new Date(o.createdAt)));
+      if (slot) slot.orders++;
+    }
+    for (const p of payments) {
+      if (!p.paidAt) continue;
+      const slot = dailyMap.get(dayKey(new Date(p.paidAt)));
+      if (slot) slot.revenueMinor += p.amountMinor || 0;
+    }
+
+    return {
+      venueId: vid,
+      days: windowDays,
+      since: since.toISOString(),
+      orders: { initiated, awaitingPayment: awaiting, active, failed },
+      payments: { fulfilled: paid, revenueMinor, revenueNGN: Math.round(revenueMinor / 100) },
+      vouchers: { issued, redeemed },
+      rates: {
+        paidPct: initiated ? Math.round((paid / initiated) * 100) : 0,
+        redeemPct: issued ? Math.round((redeemed / issued) * 100) : 0,
+      },
+      daily: [...dailyMap.values()],
+    };
+  }
+
   // ── Audits Engine ────────────────────────────────────────────────────────
 
   private auditLogs: Array<{

@@ -104,6 +104,11 @@ export class AdminController {
     return this.admin.verifyReference(reference);
   }
 
+  @Get('funnel')
+  funnel(@Query('venueId') venueId?: string, @Query('days') days?: string) {
+    return this.admin.getFunnel(venueId, days ? parseInt(days, 10) : 7);
+  }
+
   // ── Fleet & System Health ────────────────────────────────────────────────
 
   @Get('fleet')
