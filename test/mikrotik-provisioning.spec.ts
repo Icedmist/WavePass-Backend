@@ -35,8 +35,17 @@ describe('MikrotikProvisioningProcessor', () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => [] } as any)));
   });
 
-  it('success: creates hotspot user and session for order with MAC', async () => {
-    const prisma = mockPrisma();
+  it('success: router credentials always equal the voucher code (guest-facing login)', async () => {
+    const prisma = mockPrisma({
+      payment: { findUnique: vi.fn(async () => ({ id: 'pay-1' })) },
+      voucher: {
+        findUniqueOrThrow: vi.fn(),
+        update: vi.fn().mockResolvedValue({}),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        findFirst: vi.fn(async () => ({ id: 'v-1', displayCodeEnc: '482910' })),
+        create: vi.fn(),
+      },
+    });
     const adapter = mockAdapter();
     const proc = new MikrotikProvisioningProcessor(prisma, adapter);
 
@@ -53,7 +62,11 @@ describe('MikrotikProvisioningProcessor', () => {
     expect(adapter.createHotspotUser).toHaveBeenCalledTimes(1);
     const call = adapter.createHotspotUser.mock.calls[0];
     expect(call[0]).toBe('http://10.0.0.1');
-    expect(call[2].username).toBe('AA:BB:CC:DD:EE:FF');
+    // Guest logs in with the voucher code everywhere: router user must match.
+    expect(call[2].username).toBe('482910');
+    expect(call[2].password).toBe('482910');
+    // Single-device MAC binding still enforced at router level.
+    expect(call[2].macAddress).toBe('AA:BB:CC:DD:EE:FF');
     expect(prisma.$transaction).toHaveBeenCalled();
   });
 

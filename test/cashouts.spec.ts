@@ -15,6 +15,10 @@ function mockPrisma(overrides: any = {}) {
     venue: { findUnique: vi.fn(async () => ({ id: 'venue-1' })) },
     payment: {
       aggregate: vi.fn(async () => ({ _sum: { amountMinor: 500000 } })),
+      count: vi.fn(async () => 0),
+    },
+    order: {
+      count: vi.fn(async () => 0),
     },
     cashout: {
       findMany: vi.fn(async () => []),
@@ -148,5 +152,104 @@ describe('CashoutsService stability', () => {
     const svc = new CashoutsService(prisma, paystack);
     const res = await svc.reconcileProcessing('venue-1');
     expect(res).toMatchObject({ checked: 3, finalized: 2, skipped: 1 });
+  });
+});
+
+describe('CashoutsService policy engine', () => {
+  beforeEach(() => {
+    process.env.OWNER_CASHOUT_PASSWORD = 'owner-secret';
+    delete process.env.OWNER_CASHOUT_PASSWORD_HASH;
+    delete process.env.ADMIN_PASSWORD_HASH;
+    delete process.env.CASHOUT_MIN_MINOR;
+    delete process.env.CASHOUT_AUTO_MAX_MINOR;
+    delete process.env.CASHOUT_DISPUTE_HOLD_DAYS;
+  });
+
+  it('rejects below minimum payout floor', async () => {
+    process.env.CASHOUT_MIN_MINOR = '50000';
+    const prisma = mockPrisma();
+    const svc = new CashoutsService(prisma, mockPaystack());
+    await expect(
+      svc.requestCashout({ venueId: 'venue-1', amountMinor: 10000, password: 'owner-secret' } as any),
+    ).rejects.toThrow('Below minimum payout');
+  });
+
+  it('holds large amounts for manual approval, then confirms', async () => {
+    process.env.CASHOUT_AUTO_MAX_MINOR = '200000';
+    const prisma = mockPrisma({
+      cashout: {
+        findMany: vi.fn(async () => []),
+        findFirst: vi.fn(async () => null),
+        findUnique: vi.fn(async ({ where }: any) => ({
+          id: where.id,
+          venueId: 'venue-1',
+          amountMinor: 300000,
+          status: 'PENDING',
+          bankAccount: { id: 'bank-1', providerRecipientCode: 'RCP_1', accountName: 'A', accountNumber: '1', bankCode: '011' },
+        })),
+        create: vi.fn(async ({ data }: any) => ({ id: 'co-new', ...data })),
+        update: vi.fn(async ({ where, data }: any) => ({ id: where.id, venueId: 'venue-1', amountMinor: 300000, status: 'PENDING', ...data })),
+      },
+    });
+    const svc = new CashoutsService(prisma, mockPaystack());
+    const held: any = await svc.requestCashout(
+      { venueId: 'venue-1', amountMinor: 300000, password: 'owner-secret' } as any,
+    );
+    expect(held.status).toBe('PENDING');
+    expect(held.requiresApproval).toBe(true);
+
+    const done: any = await svc.confirmCashout({ cashoutId: held.id } as any, 'owner-secret');
+    expect(done.status).toBe('COMPLETED');
+  });
+
+  it('holds on recent disputes even under the cap', async () => {
+    const prisma = mockPrisma({
+      payment: {
+        aggregate: vi.fn(async () => ({ _sum: { amountMinor: 500000 } })),
+        count: vi.fn(async () => 2),
+      },
+    });
+    const svc = new CashoutsService(prisma, mockPaystack());
+    const held: any = await svc.requestCashout(
+      { venueId: 'venue-1', amountMinor: 100000, password: 'owner-secret' } as any,
+    );
+    expect(held.status).toBe('PENDING');
+    expect(held.requiresApproval).toBe(true);
+  });
+
+  it('finalizes transfer webhooks: success, failed, reversed, duplicate, unknown', async () => {
+    const prisma = mockPrisma({
+      cashout: {
+        findMany: vi.fn(async () => []),
+        findFirst: vi.fn(async ({ where }: any) => {
+          if (where.providerTransferCode === 'TRF_DONE') {
+            return { id: 'co-done', status: 'COMPLETED', venueId: 'venue-1', amountMinor: 1000, bankAccount: {} };
+          }
+          if (where.providerTransferCode === 'TRF_1') {
+            return { id: 'co-1', status: 'PROCESSING', venueId: 'venue-1', amountMinor: 100000, bankAccount: { accountName: 'A', accountNumber: '1' } };
+          }
+          return null;
+        }),
+        findUnique: vi.fn(async () => null),
+        create: vi.fn(),
+        update: vi.fn(async ({ where, data }: any) => ({ id: where.id, ...data })),
+      },
+    });
+    const svc = new CashoutsService(prisma, mockPaystack());
+
+    const ok: any = await svc.finalizeTransferEvent('TRF_1', 'success');
+    expect(ok).toMatchObject({ ok: true, status: 'COMPLETED' });
+
+    const fail: any = await svc.finalizeTransferEvent('TRF_1', 'failed');
+    expect(fail).toMatchObject({ ok: true, status: 'FAILED' });
+
+    const rev: any = await svc.finalizeTransferEvent('TRF_1', 'reversed');
+    expect(rev).toMatchObject({ ok: true, status: 'REVERSED' });
+
+    const dup: any = await svc.finalizeTransferEvent('TRF_DONE', 'success');
+    expect(dup).toMatchObject({ ok: true, duplicate: true });
+
+    const unknown: any = await svc.finalizeTransferEvent('TRF_NOPE', 'success');
+    expect(unknown.ok).toBe(false);
   });
 });

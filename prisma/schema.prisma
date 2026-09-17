@@ -83,6 +83,7 @@ enum CashoutStatus {
   COMPLETED
   FAILED
   REJECTED
+  REVERSED
 }
 
 enum ActivationCodeStatus {
@@ -404,6 +405,7 @@ model BankAccount {
   bankName              String?
   currency              String   @default("NGN")
   providerRecipientCode String? // Paystack Transfer Recipient code — cashout target
+  verifiedAt              DateTime? // set when Paystack accepts the recipient (re-verified on change)
   isDefault             Boolean  @default(false)
   createdAt             DateTime @default(now())
 
