@@ -174,4 +174,15 @@
 - [x] **Verification**: `tsc` clean; 62/62 vitest pass.
 - [x] PR [#53](https://github.com/Icedmist/WavePass-Backend/pull/53) merged to `main`.
 
+### 27. PRD Entitlement Lifecycle & Failure Alerts (Issue #54, PR #56)
+- [x] Idempotent sessions per order/voucher; deduped provisioning-delayed operator alerts; ACTIVE→REDEEMED on first use with firstLoginAt + device binding; router-sync pulls ACTIVE + REDEEMED.
+- [x] **Verification**: `tsc` clean; 64/64 vitest pass at merge.
+- [x] PR [#56](https://github.com/Icedmist/WavePass-Backend/pull/56) merged to `main`.
+
+### 28. PRD Refunds, Review Queue & Metrics (Issue #55, PR #57)
+- [x] Reversal webhooks (refund.*, charge.dispute.*): REVERSED/REFUNDED marking, unused-voucher revocation, consumed-access review flags, operator alerts, audit trail.
+- [x] Guarded GET /admin/review-queue; public GET /admin/metrics (rates, latency median, DVA/router statuses, onboarding).
+- [x] **Verification**: `tsc` clean; 70/70 vitest pass on merged main.
+- [x] PR [#57](https://github.com/Icedmist/WavePass-Backend/pull/57) merged to `main`.
+
 
