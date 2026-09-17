@@ -13,6 +13,11 @@ export class PortalController {
     return this.portal.getPortalPlans(venueId);
   }
 
+  @Get('info')
+  venueInfo(@Query('venue') venue?: string, @Query('venueId') venueId?: string) {
+    return this.portal.getPortalVenueInfo(venue || venueId);
+  }
+
   @Throttle({ portal: { ttl: 60000, limit: 20 } })
   @Post('init-payment')
   initPayment(@Body() dto: InitPaymentDto) {
@@ -23,6 +28,42 @@ export class PortalController {
   @Post('simulate-payment')
   simulatePayment(@Body() body: { mac: string; planId: string; venueId?: string }) {
     return this.portal.simulatePayment(body);
+  }
+
+  @Throttle({ portal: { ttl: 60000, limit: 15 } })
+  @Post('transfer-request')
+  transferRequest(@Body() body: {
+    venueSlug?: string;
+    venueId?: string;
+    mac: string;
+    planId: string;
+    senderName?: string;
+    amountMinor?: number;
+    bankAccount?: string;
+    notes?: string;
+  }) {
+    return this.portal.submitTransferRequest(body);
+  }
+
+  @Throttle({ portal: { ttl: 60000, limit: 30 } })
+  @Post('approve-access')
+  approveAccess(@Body() body: {
+    venueId: string;
+    orderId?: string;
+    mac: string;
+    planId?: string;
+    reference?: string;
+  }) {
+    return this.portal.approveAccess(body);
+  }
+
+  @Get('retrieve-voucher')
+  retrieveVoucher(
+    @Query('mac') mac?: string,
+    @Query('query') query?: string,
+    @Query('venueId') venueId?: string,
+  ) {
+    return this.portal.retrieveVoucher({ mac, q: query, venueId });
   }
 
   @Get('landing')

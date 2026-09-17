@@ -557,5 +557,330 @@ export class PortalService {
     commands.push(`} on-error={ :log warning "WavePass cloud voucher sync partial error" }`);
     return commands.join('\n');
   }
+
+  async getPortalVenueInfo(venueIdOrSlug?: string) {
+    let venue: any = null;
+    if (venueIdOrSlug) {
+      try {
+        venue = await this.venuesService.getVenueBySlug(venueIdOrSlug.toLowerCase().trim());
+      } catch {
+        try {
+          venue = await this.venuesService.getVenueById(venueIdOrSlug);
+        } catch {}
+      }
+    }
+    if (!venue) {
+      venue = await this.venuesService.getDefaultVenue();
+    }
+
+    const plans = await this.plansService.listPlans(venue.id);
+    const bankAccounts = await this.prisma.bankAccount.findMany({
+      where: { venueId: venue.id },
+      orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
+      select: {
+        id: true,
+        accountName: true,
+        accountNumber: true,
+        bankName: true,
+        bankCode: true,
+        isDefault: true,
+      },
+    });
+
+    return {
+      venue: { id: venue.id, name: venue.name, slug: venue.slug, logoUrl: venue.logoUrl },
+      plans,
+      bankAccounts,
+    };
+  }
+
+  async submitTransferRequest(dto: {
+    venueSlug?: string;
+    venueId?: string;
+    mac: string;
+    planId: string;
+    senderName?: string;
+    amountMinor?: number;
+    bankAccount?: string;
+    notes?: string;
+  }) {
+    const venueKey = dto.venueSlug || dto.venueId;
+    let venue: any = null;
+    if (venueKey) {
+      try {
+        venue = await this.venuesService.getVenueBySlug(venueKey.toLowerCase().trim());
+      } catch {
+        try {
+          venue = await this.venuesService.getVenueById(venueKey);
+        } catch {}
+      }
+    }
+    if (!venue) {
+      venue = await this.venuesService.getDefaultVenue();
+    }
+
+    let plan: any;
+    try {
+      plan = await this.plansService.getPlanById(dto.planId);
+    } catch {
+      throw new NotFoundException(`Plan ${dto.planId} not found`);
+    }
+
+    const mac = (dto.mac || '02:00:00:00:00:01').toUpperCase().trim();
+    const amount = dto.amountMinor || plan.priceMinor;
+    const ref = `TRF-${Date.now().toString(36).toUpperCase()}-${mac.replace(/[:-]/g, '').slice(-4)}`;
+
+    const order = await this.prisma.order.create({
+      data: {
+        venueId: venue.id,
+        planId: plan.id,
+        customerRef: mac,
+        amountMinor: amount,
+        paymentProvider: 'bank_transfer',
+        status: 'AWAITING_PAYMENT',
+      },
+    });
+
+    const ngn = `₦${Math.round(amount / 100).toLocaleString('en-NG')}`;
+    const sender = dto.senderName?.trim() || 'Guest';
+
+    // Create Notification for the venue owner
+    const db = this.prisma as any;
+    let notification: any = null;
+    if (db.notification) {
+      notification = await db.notification.create({
+        data: {
+          venueId: venue.id,
+          type: 'PAYMENT',
+          title: `Transfer Request — ${ngn}`,
+          body: `${sender} sent ${ngn} via transfer for ${plan.name} (${mac}). Tap or use Notification Panel to Approve Access.`,
+          amountMinor: amount,
+          reference: `TRANSFER_APPROVAL:${order.id}:${mac}:${plan.id}`,
+        },
+      });
+    }
+
+    return {
+      ok: true,
+      orderId: order.id,
+      reference: ref,
+      notificationId: notification?.id,
+      message: 'Transfer request submitted. Awaiting venue owner approval.',
+    };
+  }
+
+  async approveAccess(dto: {
+    venueId: string;
+    orderId?: string;
+    mac: string;
+    planId?: string;
+    reference?: string;
+  }) {
+    let order: any = null;
+    if (dto.orderId) {
+      order = await this.prisma.order.findUnique({
+        where: { id: dto.orderId },
+        include: { plan: true, venue: true },
+      });
+    } else if (dto.reference?.startsWith('TRANSFER_APPROVAL:')) {
+      const parts = dto.reference.split(':');
+      const orderId = parts[1];
+      order = await this.prisma.order.findUnique({
+        where: { id: orderId },
+        include: { plan: true, venue: true },
+      });
+    }
+
+    if (!order) {
+      order = await this.prisma.order.findFirst({
+        where: {
+          venueId: dto.venueId,
+          customerRef: dto.mac.toUpperCase().trim(),
+          status: 'AWAITING_PAYMENT',
+        },
+        include: { plan: true, venue: true },
+        orderBy: { createdAt: 'desc' },
+      });
+    }
+
+    if (!order) {
+      const planId = dto.planId || (await this.plansService.listPlans(dto.venueId))[0]?.id;
+      if (!planId) throw new NotFoundException('No plans found for venue');
+      const plan = await this.plansService.getPlanById(planId);
+      order = await this.prisma.order.create({
+        data: {
+          venueId: dto.venueId,
+          planId: plan.id,
+          customerRef: dto.mac.toUpperCase().trim(),
+          amountMinor: plan.priceMinor,
+          paymentProvider: 'bank_transfer',
+          status: 'PAID',
+        },
+        include: { plan: true, venue: true },
+      });
+    } else {
+      await this.prisma.order.update({
+        where: { id: order.id },
+        data: { status: 'PAID' },
+      });
+    }
+
+    const { createHash, randomInt } = await import('crypto');
+    const mac = dto.mac.toUpperCase().trim();
+    const isMac = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/.test(mac);
+    const durationSeconds = order.plan?.durationSeconds || 3600;
+    const expiresAt = new Date(Date.now() + durationSeconds * 1000);
+
+    const payment = await this.prisma.payment.create({
+      data: {
+        orderId: order.id,
+        provider: 'bank_transfer',
+        providerReference: `BT-${Date.now()}-${mac.replace(/[:-]/g, '').slice(-4)}`,
+        amountMinor: order.amountMinor,
+        status: 'FULFILLED',
+        channel: 'transfer',
+        paidAt: new Date(),
+      },
+    });
+
+    let voucherCode = '';
+    for (let attempt = 0; attempt < 5; attempt++) {
+      voucherCode = String(randomInt(100000, 1000000));
+      try {
+        await this.prisma.voucher.create({
+          data: {
+            venueId: order.venueId,
+            planId: order.planId,
+            paymentId: payment.id,
+            codeHash: createHash('sha256').update(voucherCode).digest('hex'),
+            displayCodeEnc: voucherCode,
+            status: 'ACTIVE',
+            issuedAt: new Date(),
+            redeemedAt: new Date(),
+            expiresAt,
+            redeemedMac: isMac ? mac : null,
+            redeemedDeviceId: isMac ? mac : null,
+            createdBy: 'bank_transfer_approval',
+          },
+        });
+        break;
+      } catch (err: any) {
+        if (err.code === 'P2002') continue;
+        throw err;
+      }
+    }
+
+    // Provision router hotspot user
+    try {
+      await this.provisioningQueue.enqueue({ orderId: order.id });
+    } catch (err: any) {
+      this.logger.warn(`Provisioning queue failed on approveAccess: ${(err as Error).message}`);
+    }
+
+    // Mark approval notification as read
+    try {
+      const db = this.prisma as any;
+      if (db.notification && order.id) {
+        await db.notification.updateMany({
+          where: { venueId: order.venueId, reference: { contains: order.id } },
+          data: { read: true },
+        });
+      }
+    } catch {}
+
+    return {
+      ok: true,
+      voucherCode,
+      mac,
+      planName: order.plan?.name,
+      durationSeconds,
+      expiresAt,
+      message: 'Access approved and voucher generated.',
+    };
+  }
+
+  async retrieveVoucher(query: { mac?: string; q?: string; venueId?: string }) {
+    let mac = (query.mac || query.q || '').toUpperCase().trim();
+    const venueId = query.venueId;
+
+    const isMac = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/.test(mac);
+
+    if (isMac) {
+      const activeVouchers = await this.prisma.voucher.findMany({
+        where: {
+          redeemedMac: mac,
+          status: { in: ['ACTIVE', 'REDEEMED'] },
+          ...(venueId ? { venueId } : {}),
+        },
+        include: { plan: true },
+        orderBy: { redeemedAt: 'desc' },
+        take: 3,
+      });
+
+      const now = Date.now();
+      for (const v of activeVouchers) {
+        const durMs = (v.plan?.durationSeconds || 3600) * 1000;
+        const exp = v.expiresAt ? v.expiresAt.getTime() : (v.redeemedAt ? v.redeemedAt.getTime() + durMs : 0);
+        if (exp > now) {
+          return {
+            found: true,
+            voucherCode: v.displayCodeEnc || v.codeHash.slice(0, 6),
+            planName: v.plan?.name,
+            expiresAt: new Date(exp),
+            remainingSeconds: Math.floor((exp - now) / 1000),
+            status: 'ACTIVE',
+          };
+        }
+      }
+
+      // Check pending bank transfer approval
+      const pendingOrder = await this.prisma.order.findFirst({
+        where: {
+          customerRef: mac,
+          status: 'AWAITING_PAYMENT',
+          paymentProvider: 'bank_transfer',
+          ...(venueId ? { venueId } : {}),
+        },
+        include: { plan: true },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      if (pendingOrder) {
+        return {
+          found: false,
+          pendingApproval: true,
+          planName: pendingOrder.plan?.name,
+          amountMinor: pendingOrder.amountMinor,
+          message: 'Your transfer is pending approval by the venue owner. Wi-Fi will connect automatically once approved.',
+        };
+      }
+    }
+
+    if (query.q) {
+      const v = await this.prisma.voucher.findFirst({
+        where: {
+          OR: [
+            { displayCodeEnc: query.q.trim() },
+            { codeHash: query.q.trim() },
+          ],
+        },
+        include: { plan: true },
+      });
+      if (v) {
+        return {
+          found: true,
+          voucherCode: v.displayCodeEnc || query.q.trim(),
+          planName: v.plan?.name,
+          status: v.status,
+        };
+      }
+    }
+
+    return {
+      found: false,
+      message: 'No active pass found. Please buy a pass or enter a valid voucher code.',
+    };
+  }
 }
+
 
