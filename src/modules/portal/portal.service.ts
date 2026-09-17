@@ -471,6 +471,14 @@ export class PortalService {
     return `${minutes}m ${seconds}s`;
   }
 
+  /** Real device MAC (MAC-shaped and not the legacy shared dummy). */
+  private isGuestMac(mac: string): boolean {
+    return (
+      /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/.test(mac || '') &&
+      (mac || '').toUpperCase() !== '02:00:00:00:00:01'
+    );
+  }
+
   private profileForDuration(seconds: number, simultaneousDevices: number = 1): string {
     if (simultaneousDevices === 2) return 'profile_duo';
     if (simultaneousDevices > 2) return 'profile_family';
@@ -626,7 +634,12 @@ export class PortalService {
       throw new NotFoundException(`Plan ${dto.planId} not found`);
     }
 
-    const mac = (dto.mac || '02:00:00:00:00:01').toUpperCase().trim();
+    const mac = (dto.mac || '').toUpperCase().trim();
+    if (!this.isGuestMac(mac)) {
+      throw new BadRequestException(
+        'Valid device MAC required — open this page from the venue Wi-Fi so we can detect your device.',
+      );
+    }
     const amount = dto.amountMinor || plan.priceMinor;
     const ref = `TRF-${Date.now().toString(36).toUpperCase()}-${mac.replace(/[:-]/g, '').slice(-4)}`;
 
@@ -726,8 +739,22 @@ export class PortalService {
     }
 
     const { createHash, randomInt } = await import('crypto');
-    const mac = dto.mac.toUpperCase().trim();
-    const isMac = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/.test(mac);
+    // Resolve the effective guest MAC: the approval request wins, otherwise
+    // fall back to the order's stored ref (and repair it when it was a dummy).
+    // The voucher MUST bind the real device MAC or the guest polling by MAC
+    // will never see the approved access.
+    const dtoMac = (dto.mac || '').toUpperCase().trim();
+    const orderMac = (order.customerRef || '').toUpperCase().trim();
+    const mac = this.isGuestMac(dtoMac) ? dtoMac : orderMac;
+    if (!this.isGuestMac(mac)) {
+      throw new BadRequestException(
+        'Valid guest device MAC required — approval must carry the guest MAC when the order has none.',
+      );
+    }
+    if (orderMac !== mac) {
+      await this.prisma.order.update({ where: { id: order.id }, data: { customerRef: mac } });
+    }
+    const isMac = true;
     const durationSeconds = order.plan?.durationSeconds || 3600;
     const expiresAt = new Date(Date.now() + durationSeconds * 1000);
 
