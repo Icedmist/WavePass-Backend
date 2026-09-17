@@ -115,9 +115,24 @@ model ActivationCode {
   expiresAt    DateTime?
   notes        String?
 
+  redemptions ActivationRedemption[]
+
   @@index([status])
   @@index([kind])
   @@index([venueId])
+}
+
+model ActivationRedemption {
+  id         String   @id @default(uuid())
+  codeId     String
+  email      String
+  venueId    String?
+  redeemedAt DateTime @default(now())
+
+  code ActivationCode @relation(fields: [codeId], references: [id], onDelete: Cascade)
+
+  @@unique([codeId, email])
+  @@index([email])
 }
 
 model Venue {

@@ -3,8 +3,10 @@ import { AdminService } from '../src/modules/admin/admin.service';
 
 function mockPrisma() {
   const store = new Map<string, any>();
-  return {
+  const ledger: any[] = [];
+  const api = {
     store,
+    ledger,
     activationCode: {
       create: vi.fn(async ({ data }: any) => {
         const row = {
@@ -40,7 +42,27 @@ function mockPrisma() {
       }),
       updateMany: vi.fn(async () => ({ count: 0 })),
     },
+    activationRedemption: {
+      create: vi.fn(async ({ data }: any) => {
+        if (ledger.some((l) => l.codeId === data.codeId && l.email === data.email)) {
+          const err: any = new Error('Unique constraint');
+          err.code = 'P2002';
+          throw err;
+        }
+        const row = { id: `ar-${ledger.length + 1}`, redeemedAt: new Date(), ...data };
+        ledger.push(row);
+        return row;
+      }),
+      findFirst: vi.fn(async ({ where }: any) => {
+        const matches = ledger.filter((l) => !where.email || l.email === where.email);
+        if (!matches.length) return null;
+        const latest = matches[matches.length - 1];
+        const code = [...store.values()].find((r) => r.id === latest.codeId) || null;
+        return { ...latest, code };
+      }),
+    },
   } as any;
+  return api;
 }
 
 describe('AdminService Activation Codes (persistent, expiring)', () => {
@@ -170,8 +192,21 @@ describe('AdminService Activation Codes (persistent, expiring)', () => {
     const r2 = await service.redeemActivationCode(code, 'owner2@venue.com', 'venue-b');
     expect(r2.ok).toBe(true);
     expect(r2.code!.status).toBe('USED'); // quota exhausted
+    // Earlier redeemer keeps activation via their own ledger grant
+    expect((await service.checkAccountActivation('owner1@venue.com')).activated).toBe(true);
+    expect((await service.checkAccountActivation('owner2@venue.com')).activated).toBe(true);
     const r3 = await service.redeemActivationCode(code, 'owner3@venue.com', 'venue-c');
     expect(r3.ok).toBe(false);
+  });
+
+  it('same account cannot burn MASTER quota twice', async () => {
+    const gen = await service.generateActivationCodes(1, 'Master batch', 3, 'talk2icedmist@gmail.com', undefined, undefined, 'MASTER');
+    const code = gen.codes[0].code;
+    expect((await service.redeemActivationCode(code, 'owner@venue.com', 'venue-a')).ok).toBe(true);
+    const again = await service.redeemActivationCode(code, 'owner@venue.com', 'venue-a');
+    expect(again.ok).toBe(false);
+    expect(again.error).toContain('already redeemed');
+    expect(prisma.ledger.length).toBe(1);
   });
 
   it('custom durationDays overrides kind defaults', async () => {
