@@ -145,4 +145,10 @@
 - [x] **Sweep**: `nest build` clean; web `next build` 24/24 routes; all mains synced; zero open issues.
 - [x] PR [#43](https://github.com/Icedmist/WavePass-Backend/pull/43) merged to `main`.
 
+### 22. Paid/Approved Orders Always Yield Access (Issue #45, PR #46)
+- [x] **Root causes**: provisioning rethrew non-whitelisted router errors (order stuck, router without user); approvals bound vouchers to missing/invalid MACs incl. shared dummy `02:00:00:00:00:01`; guest polling by real MAC then missed everywhere.
+- [x] **Fix**: degrade on ANY router error (session + ACTIVE always); approval resolves effective MAC and repairs stale refs; transfer-request requires valid MAC.
+- [x] **Verification**: `tsc` clean; 52/52 vitest pass.
+- [x] PR [#46](https://github.com/Icedmist/WavePass-Backend/pull/46) merged to `main`.
+
 
