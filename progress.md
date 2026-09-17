@@ -185,4 +185,8 @@
 - [x] **Verification**: `tsc` clean; 70/70 vitest pass on merged main.
 - [x] PR [#57](https://github.com/Icedmist/WavePass-Backend/pull/57) merged to `main`.
 
+### 29. Secret Hygiene & README Refresh
+- [x] README env section stripped to names-only (no values); endpoint table extended with all current routes; setup/verify/deploy docs added.
+- [x] Swept docs + source: no real secret material anywhere in the repo.
+
 
