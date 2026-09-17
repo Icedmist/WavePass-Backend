@@ -189,4 +189,11 @@
 - [x] README env section stripped to names-only (no values); endpoint table extended with all current routes; setup/verify/deploy docs added.
 - [x] Swept docs + source: no real secret material anywhere in the repo.
 
+### 30. PRD Cashout Policy & Single-Credential Provisioning (Issue #58, PR #59)
+- [x] **Root cause of paid-no-access**: router users were created as username=MAC while every guest surface logs in with the voucher code. Router username/password are now always the voucher code; MAC stays a router-level binding + session identifier.
+- [x] **Proof**: vertical-slice test transfer→approve→provision→retrieve→landing asserts credentials match end to end.
+- [x] **Cashout policy**: min floor, auto cap with PENDING hybrid approval, dispute holds, REVERSED state, verifiedAt, transfer webhooks, owner alerts, review-queue + metrics blocks.
+- [x] **Verification**: `tsc` clean; 75/75 vitest pass.
+- [x] PR [#59](https://github.com/Icedmist/WavePass-Backend/pull/59) merged to `main`.
+
 
