@@ -121,4 +121,10 @@
 - [x] **Verification**: `tsc` clean; 38/38 vitest pass (kind/duration/quota/simulate specs).
 - [x] PR [#35](https://github.com/Icedmist/WavePass-Backend/pull/35) merged to `main`.
 
+### 18. Activation Redemption Ledger (Issue #36, PR #37)
+- [x] **Bug**: multi-use MASTER codes overwrote the single `redeemedBy` column, locking out earlier redeemers once others consumed quota.
+- [x] **Fix**: `ActivationRedemption(codeId+email)` ledger with backfill migration; redeem records grant first (same-account double redeem denied without quota burn); check reads ledger first.
+- [x] **Verification**: `tsc` clean; 39/39 vitest pass.
+- [x] PR [#37](https://github.com/Icedmist/WavePass-Backend/pull/37) merged to `main`.
+
 
