@@ -78,21 +78,29 @@ describe('MikrotikProvisioningProcessor', () => {
     });
   });
 
-  it('failure: propagates Mikrotik adapter error for retry', async () => {
-    const prisma = mockPrisma();
-    const adapter = mockAdapter({ createHotspotUser: vi.fn().mockRejectedValue(new Error('RouterOS 500')) });
-    const proc = new MikrotikProvisioningProcessor(prisma, adapter);
+  it('degrade: any router error still yields ACTIVE order + session (paid access never lost)', async () => {
+    for (const msg of ['RouterOS 500', 'EHOSTUNREACH', 'ECONNRESET', 'socket hang up']) {
+      const prisma = mockPrisma();
+      const adapter = mockAdapter({ createHotspotUser: vi.fn().mockRejectedValue(new Error(msg)) });
+      const proc = new MikrotikProvisioningProcessor(prisma, adapter);
 
-    prisma.order.findUniqueOrThrow.mockResolvedValue({
-      id: 'order-3',
-      venueId: 'venue-1',
-      customerRef: null,
-      plan: { durationSeconds: 3600, dataLimitBytes: null, simultaneousDevices: 1, rateLimit: null },
-      venue: { id: 'venue-1', routers: [{ id: 'r1', endpoint: 'http://10.0.0.1', venueId: 'venue-1' }] },
-    });
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'order-3',
+        venueId: 'venue-1',
+        customerRef: null,
+        plan: { durationSeconds: 3600, dataLimitBytes: null, simultaneousDevices: 1, rateLimit: null },
+        venue: { id: 'venue-1', routers: [{ id: 'r1', endpoint: 'http://10.0.0.1', venueId: 'venue-1' }] },
+      });
+      prisma.payment = { findUnique: vi.fn().mockResolvedValue(null) } as any;
+      prisma.voucher = { findFirst: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({ id: 'v-3', displayCodeEnc: '111111' }) } as any;
 
-    await expect((proc as any).provisionForOrder('order-3')).rejects.toThrow('RouterOS 500');
-    expect(prisma.$transaction).not.toHaveBeenCalled();
+      await (proc as any).provisionForOrder('order-3');
+      expect(prisma.$transaction).toHaveBeenCalled();
+      expect(prisma.order.update).toHaveBeenCalledWith({
+        where: { id: 'order-3' },
+        data: { status: 'ACTIVE' },
+      });
+    }
   });
 
   it('voucher success path', async () => {

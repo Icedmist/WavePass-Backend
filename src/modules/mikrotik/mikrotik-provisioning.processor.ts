@@ -120,17 +120,10 @@ export class MikrotikProvisioningProcessor extends WorkerHost {
         },
       );
     } catch (err: any) {
-      const isNetworkErr = err.message?.includes('ECONNREFUSED') ||
-                           err.message?.includes('ETIMEDOUT') ||
-                           err.message?.includes('ENOTFOUND') ||
-                           err.message?.includes('fetch failed') ||
-                           router.endpoint.includes('192.168.') ||
-                           router.endpoint.includes('localhost');
-      if (isNetworkErr) {
-        this.logger.warn(`Direct router push failed/skipped for ${router.endpoint}: ${err.message}. Voucher ${voucher?.displayCodeEnc || username} is active for RouterOS sync or local login.`);
-      } else {
-        throw err;
-      }
+      // Degrade, never fail the order: the cloud voucher is the source of
+      // truth and stays usable via router-sync pull + portal code login.
+      // Reconcile self-heals the hardware user later. Only DB errors rethrow.
+      this.logger.warn(`Router push failed for ${router.endpoint}: ${err.message}. Order ${order.id} proceeds ACTIVE with cloud voucher ${voucher?.displayCodeEnc || username}.`);
     }
 
     await this.prisma.$transaction([
@@ -217,17 +210,9 @@ export class MikrotikProvisioningProcessor extends WorkerHost {
         },
       );
     } catch (err: any) {
-      const isNetworkErr = err.message?.includes('ECONNREFUSED') ||
-                           err.message?.includes('ETIMEDOUT') ||
-                           err.message?.includes('ENOTFOUND') ||
-                           err.message?.includes('fetch failed') ||
-                           router.endpoint.includes('192.168.') ||
-                           router.endpoint.includes('localhost');
-      if (isNetworkErr) {
-        this.logger.warn(`Direct router push failed/skipped for ${router.endpoint}: ${err.message}. Voucher ${voucher.displayCodeEnc} is active for RouterOS sync or local login.`);
-      } else {
-        throw err;
-      }
+      // Degrade, never fail the claim: the cloud voucher stays usable via
+      // router-sync pull + portal code login; reconcile heals hardware later.
+      this.logger.warn(`Router push failed for ${router.endpoint}: ${err.message}. Voucher ${voucher.displayCodeEnc} proceeds ACTIVE.`);
     }
 
     await this.prisma.$transaction([
