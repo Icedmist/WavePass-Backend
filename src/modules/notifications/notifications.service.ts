@@ -38,6 +38,45 @@ export class NotificationsService {
     });
   }
 
+  /**
+   * Best-effort alert, deduplicated: skips when an unread notification with
+   * the same reference already exists (retried jobs must not spam owners).
+   */
+  async notifyOnce(data: {
+    venueId: string;
+    type?: 'PAYMENT' | 'VOUCHER' | 'SYSTEM';
+    title: string;
+    body: string;
+    amountMinor?: number;
+    reference?: string;
+  }) {
+    try {
+      const db = this.prisma as any;
+      if (!db.notification) return null;
+      if (data.reference) {
+        const dupe = await db.notification.findFirst({
+          where: { venueId: data.venueId, reference: data.reference, read: false },
+          select: { id: true },
+        });
+        if (dupe) return null;
+      }
+      return await db.notification.create({ data });
+    } catch (err: any) {
+      this.logger.warn(`Notification notifyOnce skipped: ${err.message}`);
+      return null;
+    }
+  }
+
+  async provisioningDelayed(venueId: string, orderId: string, detail: string) {
+    return this.notifyOnce({
+      venueId,
+      type: 'SYSTEM',
+      title: 'Provisioning delayed — router sync required',
+      body: `Order ${orderId} is paid and usable via cloud voucher, but the router push failed (${detail}). The router will pick it up via router-sync; reconcile if it persists.`,
+      reference: `PROVISIONING:${orderId}`,
+    });
+  }
+
   async listByVenue(venueId: string, unreadOnly = false) {
     try {
       const db = this.prisma as any;
