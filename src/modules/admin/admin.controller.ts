@@ -156,5 +156,32 @@ export class AdminController {
   redeemActivationCode(@Body() body: { code: string; email: string; venueId?: string }) {
     return this.admin.redeemActivationCode(body.code, body.email, body.venueId);
   }
+
+  // ── Activation Code Requests ─────────────────────────────────────────────
+
+  @Post('activation-requests')
+  createActivationRequest(
+    @Body() body: { email: string; name?: string; phone?: string; venueName?: string; venueId?: string; message?: string },
+  ) {
+    return this.admin.createActivationRequest(body);
+  }
+
+  @Get('activation-requests')
+  listActivationRequests(@Query('status') status?: string) {
+    return this.admin.listActivationRequests(status);
+  }
+
+  @Post('activation-requests/:id/approve')
+  approveActivationRequest(
+    @Param('id') id: string,
+    @Body() body: { reviewedBy?: string; mode?: 'code' | 'direct'; kind?: 'LICENSE' | 'MASTER' | 'TRIAL'; durationDays?: number | null; expiresAt?: string; reviewNote?: string },
+  ) {
+    return this.admin.approveActivationRequest(id, body);
+  }
+
+  @Post('activation-requests/:id/reject')
+  rejectActivationRequest(@Param('id') id: string, @Body() body: { reviewedBy?: string; reviewNote?: string }) {
+    return this.admin.rejectActivationRequest(id, body);
+  }
 }
 

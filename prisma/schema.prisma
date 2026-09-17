@@ -135,6 +135,33 @@ model ActivationRedemption {
   @@index([email])
 }
 
+enum ActivationRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  GRANTED
+}
+
+model ActivationRequest {
+  id            String                  @id @default(uuid())
+  email         String
+  name          String?
+  phone         String?
+  venueName     String?
+  venueId       String?
+  message       String?
+  status        ActivationRequestStatus @default(PENDING)
+  grantedCodeId String?
+  grantedUntil  DateTime?
+  reviewedBy    String?
+  reviewedAt    DateTime?
+  reviewNote    String?
+  createdAt     DateTime                @default(now())
+
+  @@index([status])
+  @@index([email])
+}
+
 model Venue {
   id        String   @id @default(uuid())
   name      String
@@ -394,6 +421,7 @@ model Cashout {
   status               CashoutStatus @default(PENDING)
   providerTransferCode String?
   providerTransferRef  String?
+  clientReference      String?       @unique
   confirmedBy          String? // admin identity that confirmed with password
   requestedAt          DateTime      @default(now())
   reviewedAt           DateTime?
