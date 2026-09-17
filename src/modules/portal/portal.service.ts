@@ -655,7 +655,7 @@ export class PortalService {
           title: `Transfer Request — ${ngn}`,
           body: `${sender} sent ${ngn} via transfer for ${plan.name} (${mac}). Tap or use Notification Panel to Approve Access.`,
           amountMinor: amount,
-          reference: `TRANSFER_APPROVAL:${order.id}:${mac}:${plan.id}`,
+          reference: `TRANSFER_APPROVAL:${order.id}:${mac}:${plan.id}:${venue.id}`,
         },
       });
     }
