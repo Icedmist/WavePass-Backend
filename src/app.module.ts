@@ -58,7 +58,7 @@ import { HealthController } from './modules/health/health.controller';
     ConfigModule.forRoot({ isGlobal: true }),
     JwtModule.register({
       secret: process.env.JWT_SECRET || 'wavepass-change-me-jwt',
-      signOptions: { expiresIn: (process.env.ADMIN_JWT_EXPIRES_IN || '2h') as any },
+      signOptions: { expiresIn: (process.env.ADMIN_JWT_EXPIRES_IN || '48h') as any },
     }),
     ThrottlerModule.forRoot([
       {

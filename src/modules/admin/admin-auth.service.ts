@@ -5,8 +5,9 @@ import { createHash, timingSafeEqual } from 'crypto';
 @Injectable()
 export class AdminAuthService {
   private readonly jwtSecret = process.env.JWT_SECRET || 'wavepass-change-me-jwt';
-  // Flag: expiry 2h — confirm if you want 30m (more secure) or 12h (less friction). Using 2h as sensible default.
-  private readonly expiresIn = process.env.ADMIN_JWT_EXPIRES_IN || '2h';
+  // Admin session matches the app's 48-hour operator session policy.
+  // Override with ADMIN_JWT_EXPIRES_IN (e.g. '2h' for stricter security).
+  private readonly expiresIn = process.env.ADMIN_JWT_EXPIRES_IN || '48h';
 
   constructor(private readonly jwt: JwtService) {}
 
