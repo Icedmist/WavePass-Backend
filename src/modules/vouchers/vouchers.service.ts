@@ -1,4 +1,4 @@
-import { ConflictException, GoneException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, GoneException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomBytes, createHash, randomInt } from 'crypto';
 import { PrismaService } from '../../common/prisma.service';
 import { MikrotikProvisioningQueue } from '../mikrotik/mikrotik-provisioning.queue';
@@ -27,25 +27,128 @@ export class VouchersService {
     private readonly provisioningQueue: MikrotikProvisioningQueue,
   ) {}
 
-  /** Batch generation is idempotent via a caller-supplied idempotencyKey (not modeled here — enforce via unique constraint on a batch table, or dedupe at the queue/job layer). */
-  async generateBatch(params: { venueId: string; planId: string; quantity: number; expiresAt?: Date; createdBy?: string }) {
-    const vouchers = Array.from({ length: params.quantity }, () => {
-      const code = humanCode();
-      return {
-        venueId: params.venueId,
-        planId: params.planId,
-        codeHash: hashCode(code),
-        // In production, encrypt `code` with ENCRYPTION_KEY for reprint retrieval
-        // rather than storing plaintext. Omitted here for scaffold brevity.
-        displayCodeEnc: code,
-        expiresAt: params.expiresAt,
-        createdBy: params.createdBy,
-        status: 'ISSUED' as const,
-      };
-    });
+  /**
+   * Batch generation. Honors caller-supplied codes so the cloud record matches
+   * what staff print and what the router holds:
+   *  - customCodes[] (bulk) or customCode (single) are stored verbatim
+   *    (normalized); otherwise random codes are generated.
+   *  - Bulk inserts skip duplicates and report created vs requested counts.
+   *  - A single custom-code collision throws 409 so the caller regenerates.
+   */
+  async generateBatch(params: {
+    venueId: string; planId: string; quantity: number;
+    customCode?: string; customCodes?: string[];
+    expiresAt?: Date; createdBy?: string;
+  }) {
+    if (!params.venueId || !params.planId) {
+      throw new BadRequestException('venueId and planId are required');
+    }
+    const qty = Math.min(Math.max(Math.floor(params.quantity || 0), 1), 500);
 
-    await this.prisma.voucher.createMany({ data: vouchers });
-    return vouchers.map((v) => ({ code: v.displayCodeEnc, expiresAt: v.expiresAt }));
+    let codes: string[];
+    if (params.customCodes && params.customCodes.length > 0) {
+      codes = params.customCodes.slice(0, 500).map(normalizeCode).filter((c) => c.length > 0);
+      if (codes.length === 0) throw new BadRequestException('No usable custom codes supplied');
+    } else if (params.customCode && normalizeCode(params.customCode).length > 0) {
+      codes = [normalizeCode(params.customCode)];
+    } else {
+      codes = Array.from({ length: qty }, () => humanCode());
+    }
+    // De-duplicate within the request (same code twice would P2002 the batch).
+    codes = [...new Set(codes)];
+
+    const rows = codes.map((code) => ({
+      venueId: params.venueId,
+      planId: params.planId,
+      codeHash: hashCode(code),
+      // In production, encrypt `code` with ENCRYPTION_KEY for reprint retrieval
+      // rather than storing plaintext. Omitted here for scaffold brevity.
+      displayCodeEnc: code,
+      expiresAt: params.expiresAt,
+      createdBy: params.createdBy,
+      status: 'ISSUED' as const,
+    }));
+
+    // Partition against existing rows: re-uploads of our own codes are
+    // idempotent successes; codes owned elsewhere are conflicts.
+    const partition = async () => {
+      const existing = await this.prisma.voucher.findMany({
+        where: { codeHash: { in: rows.map((r) => r.codeHash) } },
+        select: { codeHash: true, displayCodeEnc: true, expiresAt: true, venueId: true, planId: true },
+      });
+      const byHash = new Map(existing.map((e) => [e.codeHash, e]));
+      const usable: Array<{ code: string | null; expiresAt: Date | null }> = [];
+      const fresh: typeof rows = [];
+      const conflicts: Array<{ code: string; reason: string }> = [];
+      for (const row of rows) {
+        const hit = byHash.get(row.codeHash);
+        if (!hit) {
+          fresh.push(row);
+        } else if (hit.venueId === params.venueId && hit.planId === params.planId) {
+          usable.push({ code: hit.displayCodeEnc, expiresAt: hit.expiresAt });
+        } else {
+          conflicts.push({ code: row.displayCodeEnc!, reason: 'code already exists for another venue/plan' });
+        }
+      }
+      return { usable, fresh, conflicts };
+    };
+
+    let { usable, fresh, conflicts } = await partition();
+    if (fresh.length > 0) {
+      try {
+        await this.prisma.voucher.createMany({ data: fresh });
+        const inserted = await this.prisma.voucher.findMany({
+          where: { codeHash: { in: fresh.map((r) => r.codeHash) } },
+          select: { displayCodeEnc: true, expiresAt: true },
+        });
+        usable = [...usable, ...inserted.map((v) => ({ code: v.displayCodeEnc, expiresAt: v.expiresAt }))];
+      } catch (err: any) {
+        if (err.code === 'P2002') {
+          if (rows.length === 1) {
+            throw new ConflictException('Voucher code already exists — generate a new one');
+          }
+          // Lost a bulk race — re-partition once and accept the outcome.
+          const retry = await partition();
+          usable = retry.usable;
+          conflicts = retry.conflicts;
+        } else {
+          throw err;
+        }
+      }
+    }
+
+    if (rows.length === 1 && conflicts.length > 0) {
+      throw new ConflictException('Voucher code already exists — generate a new one');
+    }
+
+    return {
+      vouchers: usable,
+      requested: codes.length,
+      created: usable.length,
+      conflicts,
+    };
+  }
+
+  /** Non-consuming existence check so apps can verify a code landed in cloud
+   *  before presenting it as valid (never marks REDEEMED). */
+  async check(code: string) {
+    const normalized = normalizeCode(code);
+    if (!normalized) throw new BadRequestException('Voucher code is required');
+    const codeHash = hashCode(normalized);
+    const v = await this.prisma.voucher.findUnique({
+      where: { codeHash },
+      include: { plan: { select: { name: true } }, venue: { select: { id: true, name: true } } },
+    });
+    if (!v) return { exists: false, code: normalized };
+    return {
+      exists: true,
+      code: v.displayCodeEnc || normalized,
+      status: v.status,
+      planName: (v as any).plan?.name || null,
+      venueId: v.venueId,
+      venueName: (v as any).venue?.name || null,
+      expiresAt: v.expiresAt,
+    };
   }
 
   /** Atomic single-use redemption. Two concurrent attempts cannot both succeed (PRD §23). */

@@ -1,4 +1,4 @@
-import { Body, Controller, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import { VouchersService } from './vouchers.service';
 
 @Controller('vouchers')
@@ -7,12 +7,17 @@ export class VouchersController {
 
   @Post('batches')
   generateBatch(
-    @Body() body: { venueId: string; planId: string; quantity: number; expiresAt?: string; createdBy?: string },
+    @Body() body: { venueId: string; planId: string; quantity: number; customCode?: string; customCodes?: string[]; expiresAt?: string; createdBy?: string },
   ) {
     return this.vouchers.generateBatch({
       ...body,
       expiresAt: body.expiresAt ? new Date(body.expiresAt) : undefined,
     });
+  }
+
+  @Get('check/:code')
+  check(@Param('code') code: string) {
+    return this.vouchers.check(code);
   }
 
   @Post(':code/redeem')
