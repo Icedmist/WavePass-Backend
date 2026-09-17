@@ -45,12 +45,37 @@ export class VirtualAccountsService {
     return `venue.${slug || 'wavepass'}@nexawavepass.com`;
   }
 
+  /** Stale rows from the mock era (or failed activations) must never shadow
+   *  a real Paystack DVA once live keys are configured. */
+  private isMockRow(row: any): boolean {
+    if (!row) return false;
+    const meta = row.metadata as any;
+    if (meta && (meta.mock === true || meta.mock?.toString() === 'true')) return true;
+    const bank = (row.bankName || '').toString().toLowerCase();
+    if (bank.includes('mock')) return true;
+    if (!row.accountNumber || row.accountNumber === 'PENDING') return true;
+    return false;
+  }
+
   /** Ensure a DVA exists for a venue — idempotent and race-safe. PENDING rows
    *  from earlier failed attempts are retried instead of returned forever. */
   async ensureForVenue(venueId: string, opts?: { email?: string; preferredBank?: string }) {
     const existing = await this.prisma.virtualAccount.findUnique({ where: { venueId } });
-    if (existing && existing.status === 'ACTIVE') return existing;
-    if (existing && this.paystack.isMock()) return existing;
+    if (existing && existing.status === 'ACTIVE' && (this.paystack.isMock() || !this.isMockRow(existing))) {
+      return existing;
+    }
+    if (existing && this.isMockRow(existing) && !this.paystack.isMock()) {
+      // Stale mock-era row: drop it so a real Paystack DVA takes its place.
+      // No real money ever sat behind mock numbers, so deletion is safe.
+      try {
+        await this.prisma.virtualAccount.delete({ where: { venueId } });
+      } catch (err: any) {
+        if (err.code !== 'P2025') throw err;
+      }
+      this.logger.log(`Removed stale mock DVA for venue ${venueId}; provisioning a live one.`);
+    } else if (existing && this.paystack.isMock()) {
+      return existing;
+    }
 
     const venue = await this.venuesService.getVenueById(venueId);
     if (this.paystack.isMock()) {
