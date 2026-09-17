@@ -151,4 +151,10 @@
 - [x] **Verification**: `tsc` clean; 52/52 vitest pass.
 - [x] PR [#46](https://github.com/Icedmist/WavePass-Backend/pull/46) merged to `main`.
 
+### 23. Stale Mock DVA Replacement (Issue #47, PR #48)
+- [x] **Bug**: mock-era DVA rows (status ACTIVE) were returned forever after live keys were configured — app showed unavailable DVA + fake numbers.
+- [x] **Fix**: live mode drops mock rows and provisions a real Paystack DVA; secret key trimmed everywhere.
+- [x] **Verification**: `tsc` clean; 55/55 vitest pass.
+- [x] PR [#48](https://github.com/Icedmist/WavePass-Backend/pull/48) merged to `main`.
+
 
