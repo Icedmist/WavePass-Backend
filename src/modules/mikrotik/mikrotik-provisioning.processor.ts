@@ -102,8 +102,13 @@ export class MikrotikProvisioningProcessor extends WorkerHost {
       return;
     }
 
-    const username = isMac ? order.customerRef!.toUpperCase() : (voucher?.displayCodeEnc || `wp_${randomBytes(4).toString('hex')}`);
-    const password = isMac ? username : (voucher?.displayCodeEnc || randomBytes(6).toString('hex'));
+    // The voucher CODE is the single credential everywhere (portal auto-login,
+    // success page, retrieve-voucher, reconnect, QR, print). MAC-bound plans
+    // still enforce single-device via the mac-address field below — never by
+    // overloading the username, which previously stranded paying guests with
+    // a code the router would reject.
+    const username = voucher?.displayCodeEnc || `wp_${randomBytes(4).toString('hex')}`;
+    const password = voucher?.displayCodeEnc || randomBytes(6).toString('hex');
     const profile = order.plan.rateLimit || this.profileForDuration(order.plan.durationSeconds, order.plan.simultaneousDevices);
 
     // Option A: Bind strictly to device MAC address for single-device orders (simultaneousDevices === 1)
@@ -149,8 +154,8 @@ export class MikrotikProvisioningProcessor extends WorkerHost {
           routerId: router.id,
           voucherId: voucher?.id || null,
           orderId: order.id,
-          mac: isMac ? username : null,
-          deviceId: isMac ? username : null,
+          mac: isMac ? order.customerRef!.toUpperCase() : null,
+          deviceId: isMac ? order.customerRef!.toUpperCase() : null,
           expiresAt,
         },
       }),

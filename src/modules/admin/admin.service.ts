@@ -668,7 +668,8 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
 
   async getReviewQueue(venueId?: string) {
     const stuckSince = new Date(Date.now() - 30 * 60 * 1000);
-    const [refundRequired, stuckProvisioning, failedPayments, reversedPayments] = await Promise.all([
+    const [refundRequired, stuckProvisioning, failedPayments, reversedPayments, pendingCashouts, failedCashouts] =
+      await Promise.all([
       this.prisma.order.findMany({
         where: { status: 'REFUND_REQUIRED', ...(venueId ? { venueId } : {}) },
         include: { plan: true, venue: { select: { id: true, name: true } }, payment: true },
@@ -706,6 +707,24 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
         orderBy: { createdAt: 'desc' },
         take: 100,
       }),
+      this.prisma.cashout.findMany({
+        where: {
+          status: { in: ['PENDING', 'PROCESSING', 'REVERSED'] },
+          ...(venueId ? { venueId } : {}),
+        },
+        include: { bankAccount: true, venue: { select: { id: true, name: true } } },
+        orderBy: { createdAt: 'desc' },
+        take: 100,
+      }),
+      this.prisma.cashout.findMany({
+        where: {
+          status: 'FAILED',
+          ...(venueId ? { venueId } : {}),
+        },
+        include: { bankAccount: true, venue: { select: { id: true, name: true } } },
+        orderBy: { createdAt: 'desc' },
+        take: 100,
+      }),
     ]);
 
     const counts = {
@@ -713,11 +732,15 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
       stuckProvisioning: stuckProvisioning.length,
       failedPayments: failedPayments.length,
       reversedPayments: reversedPayments.length,
+      pendingCashouts: pendingCashouts.length,
+      failedCashouts: failedCashouts.length,
       total:
         refundRequired.length +
         stuckProvisioning.length +
         failedPayments.length +
-        reversedPayments.length,
+        reversedPayments.length +
+        pendingCashouts.length +
+        failedCashouts.length,
     };
     return {
       counts,
@@ -725,6 +748,8 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
       stuckProvisioning,
       failedPayments,
       reversedPayments,
+      pendingCashouts,
+      failedCashouts,
     };
   }
 
@@ -747,6 +772,8 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
       dvas,
       plans,
       routers,
+      cashoutGroups,
+      cashoutCompleted,
     ] = await Promise.all([
       this.prisma.order.count({ where: { createdAt: { gte: since } } }),
       this.prisma.payment.count({ where: { status: 'FULFILLED', paidAt: { gte: since } } }),
@@ -762,6 +789,16 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
       this.prisma.virtualAccount.groupBy({ by: ['status'], _count: { status: true } }),
       this.prisma.plan.count({ where: { active: true } }),
       this.prisma.router.groupBy({ by: ['status'], _count: { status: true } }),
+      this.prisma.cashout.groupBy({
+        by: ['status'],
+        where: { createdAt: { gte: since } },
+        _count: { status: true },
+      }),
+      this.prisma.cashout.findMany({
+        where: { status: 'COMPLETED', completedAt: { not: null }, createdAt: { gte: since } },
+        select: { createdAt: true, completedAt: true },
+        take: 500,
+      }),
     ]);
 
     // Average payment-to-access latency (paidAt -> first session start).
@@ -806,6 +843,33 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
     const routerByStatus: Record<string, number> = {};
     for (const g of routers) routerByStatus[g.status] = g._count.status;
 
+    const cashoutByStatus: Record<string, number> = {};
+    for (const g of cashoutGroups) cashoutByStatus[g.status] = g._count.status;
+    const cashoutRequested =
+      (cashoutByStatus.PENDING || 0) +
+      (cashoutByStatus.APPROVED || 0) +
+      (cashoutByStatus.CONFIRMED || 0) +
+      (cashoutByStatus.PROCESSING || 0) +
+      (cashoutByStatus.COMPLETED || 0) +
+      (cashoutByStatus.FAILED || 0) +
+      (cashoutByStatus.REJECTED || 0) +
+      (cashoutByStatus.REVERSED || 0);
+    const cashoutDone = cashoutByStatus.COMPLETED || 0;
+    let cashoutLatencyMedianSec: number | null = null;
+    {
+      const deltas: number[] = [];
+      for (const c of cashoutCompleted) {
+        if (c.createdAt && c.completedAt) {
+          const d = (new Date(c.completedAt).getTime() - new Date(c.createdAt).getTime()) / 1000;
+          if (d >= 0) deltas.push(d);
+        }
+      }
+      if (deltas.length > 0) {
+        deltas.sort((a, b) => a - b);
+        cashoutLatencyMedianSec = Math.round(deltas[Math.floor(deltas.length / 2)]);
+      }
+    }
+
     const pct = (n: number, d: number) => (d > 0 ? Math.round((n / d) * 100) : 0);
     return {
       days: windowDays,
@@ -821,6 +885,16 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
       provisioning: { sessions, stuckProvisioning },
       reversals: { reversed },
       accessLatencyMedianSec: accessLatencySec,
+      cashouts: {
+        byStatus: cashoutByStatus,
+        requested: cashoutRequested,
+        completed: cashoutDone,
+        completionPct: pct(cashoutDone, cashoutRequested),
+        failed: cashoutByStatus.FAILED || 0,
+        reversed: cashoutByStatus.REVERSED || 0,
+        pendingApproval: (cashoutByStatus.PENDING || 0) + (cashoutByStatus.APPROVED || 0),
+        latencyMedianSec: cashoutLatencyMedianSec,
+      },
       dvas: { byStatus: dvaByStatus },
       routers: { byStatus: routerByStatus },
       onboarding: { venues, activePlans: plans },

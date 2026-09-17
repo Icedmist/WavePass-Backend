@@ -13,6 +13,7 @@ import { PaystackService } from './paystack.service';
 import { PrismaService } from '../../common/prisma.service';
 import { PaymentFulfilmentQueue } from '../jobs/payment-fulfilment.queue';
 import { AdminService } from '../admin/admin.service';
+import { CashoutsService } from '../cashouts/cashouts.service';
 
 const REVERSAL_EVENTS = new Set([
   'refund.pending',
@@ -23,6 +24,12 @@ const REVERSAL_EVENTS = new Set([
   'charge.dispute.resolve',
 ]);
 
+const TRANSFER_EVENTS = new Set([
+  'transfer.success',
+  'transfer.failed',
+  'transfer.reversed',
+]);
+
 @Controller('payments/paystack')
 export class PaystackController {
   constructor(
@@ -30,6 +37,7 @@ export class PaystackController {
     private readonly prisma: PrismaService,
     private readonly fulfilmentQueue: PaymentFulfilmentQueue,
     private readonly admin?: AdminService,
+    private readonly cashouts?: CashoutsService,
   ) {}
 
   @Throttle({ strict: { ttl: 60000, limit: 10 } })
@@ -133,6 +141,15 @@ export class PaystackController {
     if (body?.event && REVERSAL_EVENTS.has(body.event)) {
       const result = await this.admin?.handlePaymentReversal(body.event, body.data || {});
       return { received: true, reversal: result || { ok: false, error: 'admin unavailable' } };
+    }
+
+    // Transfer lifecycle: finalize owner cashouts (success/failed/reversed).
+    if (body?.event && TRANSFER_EVENTS.has(body.event)) {
+      const code = body?.data?.transfer_code;
+      const status = body?.data?.status || body.event.split('.')[1];
+      if (!code) return { received: true, transfer: { ok: false, error: 'no transfer code' } };
+      const result = await this.cashouts?.finalizeTransferEvent(code, status);
+      return { received: true, transfer: result || { ok: false, error: 'cashouts unavailable' } };
     }
 
     return { received: true };

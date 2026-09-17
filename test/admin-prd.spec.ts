@@ -17,6 +17,10 @@ function mockPrisma(overrides: any = {}) {
       count: vi.fn(async () => 0),
       update: vi.fn(async () => ({})),
     },
+    cashout: {
+      findMany: vi.fn(async () => []),
+      groupBy: vi.fn(async () => []),
+    },
     webhookEvent: {
       count: vi.fn(async () => 0),
     },

@@ -8,15 +8,20 @@ import {
 import { createHash, timingSafeEqual } from 'crypto';
 import { PrismaService } from '../../common/prisma.service';
 import { PaystackService } from '../paystack/paystack.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { RequestCashoutDto } from './dto/request-cashout.dto';
 import { ConfirmCashoutDto } from './dto/confirm-cashout.dto';
 import { RegisterBankAccountDto } from './dto/register-bank-account.dto';
 
 /**
- * Cashout: the venue owner accumulates revenue in their DVA (settled into the
- * single platform/Nexa account). As long as the requested amount is within
- * their available balance, they can cash out automatically by confirming
- * **their own** password — no admin approval queue.
+ * Cashout (PRD §13): hybrid approval model.
+ * - Small routine cashouts from clean venues auto-release on owner password.
+ * - Large amounts (over CASHOUT_AUTO_MAX_MINOR) or venues with recent
+ *   disputes (REVERSED/REFUNDED payments, REFUND_REQUIRED orders within
+ *   CASHOUT_DISPUTE_HOLD_DAYS) go PENDING for manual approval.
+ * - Minimum payout floor via CASHOUT_MIN_MINOR (default ₦1 sanity guard).
+ * Ledger: earned − locked(pending) − cashedOut = available. FAILED cashouts
+ * drop out of locked (funds return to available); REVERSED flags review.
  */
 @Injectable()
 export class CashoutsService {
@@ -33,10 +38,88 @@ export class CashoutsService {
       process.env.OWNER_CASHOUT_PASSWORD || process.env.ADMIN_PASSWORD || 'wavepass-change-me',
     ).digest('hex');
 
+  private readonly minCashoutMinor = Math.max(1, Number(process.env.CASHOUT_MIN_MINOR || 100));
+  private readonly autoMaxMinor = (() => {
+    const v = Number(process.env.CASHOUT_AUTO_MAX_MINOR || 0);
+    return v > 0 ? v : Number.POSITIVE_INFINITY; // 0/empty = no cap
+  })();
+  private readonly disputeHoldDays = Math.max(0, Number(process.env.CASHOUT_DISPUTE_HOLD_DAYS || 7));
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly paystack: PaystackService,
+    private readonly notifications?: NotificationsService,
   ) {}
+
+  private async notifyCashout(
+    venueId: string,
+    title: string,
+    body: string,
+    amountMinor?: number,
+    reference?: string,
+  ) {
+    try {
+      await this.notifications?.create({
+        venueId,
+        type: 'VOUCHER',
+        title,
+        body,
+        amountMinor,
+        reference,
+      });
+    } catch (err: any) {
+      this.logger.warn(`Cashout notification skipped: ${err.message}`);
+    }
+  }
+
+  /**
+   * Eligibility gate. Returns { eligible, requiresApproval, reasons[] }.
+   * Balance sufficiency stays inside the atomic request transaction; policy
+   * checks (thresholds, dispute hold) run here.
+   */
+  async checkEligibility(venueId: string, amountMinor: number) {
+    const reasons: string[] = [];
+    let requiresApproval = false;
+
+    if (amountMinor < this.minCashoutMinor) {
+      return {
+        eligible: false,
+        requiresApproval: false,
+        reasons: [`Below minimum payout of ${this.minCashoutMinor} kobo`],
+      };
+    }
+
+    if (amountMinor > this.autoMaxMinor) {
+      requiresApproval = true;
+      reasons.push(
+        `Above auto-release cap of ${this.autoMaxMinor} kobo — queued for manual approval`,
+      );
+    }
+
+    if (this.disputeHoldDays > 0) {
+      const since = new Date(Date.now() - this.disputeHoldDays * 86400000);
+      const [reversed, refundRequired] = await Promise.all([
+        this.prisma.payment.count({
+          where: {
+            status: { in: ['REVERSED', 'REFUNDED'] },
+            createdAt: { gte: since },
+            order: { venueId },
+          },
+        }),
+        this.prisma.order.count({
+          where: { status: 'REFUND_REQUIRED', venueId, createdAt: { gte: since } },
+        }),
+      ]);
+      if (reversed > 0 || refundRequired > 0) {
+        requiresApproval = true;
+        reasons.push(
+          `Recent disputes on this venue (${reversed} reversed/refunded, ${refundRequired} refund-required) — held for review`,
+        );
+      }
+    }
+
+    return { eligible: true, requiresApproval, reasons };
+  }
 
   /** Owner password — gates auto-cashout (fast, per-venue). Falls back to admin hash. */
   private verifyOwnerPassword(password: string): boolean {
@@ -207,6 +290,7 @@ export class CashoutsService {
         bankCode: dto.bankCode,
         bankName: dto.bankName,
         providerRecipientCode: recipientCode,
+        verifiedAt: recipientCode ? new Date() : undefined,
         isDefault: count === 0,
       },
     });
@@ -223,7 +307,7 @@ export class CashoutsService {
     });
     return this.prisma.bankAccount.update({
       where: { id: bank.id },
-      data: { providerRecipientCode: recipient.recipient_code },
+      data: { providerRecipientCode: recipient.recipient_code, verifiedAt: new Date() },
     });
   }
 
@@ -260,6 +344,13 @@ export class CashoutsService {
       );
     }
 
+    // Policy gate: minimum floor, auto-cap, and dispute holds route to PENDING
+    // manual approval instead of instant execution.
+    const policy = await this.checkEligibility(dto.venueId, dto.amountMinor);
+    if (!policy.eligible) {
+      throw new BadRequestException(policy.reasons.join('; '));
+    }
+
     // Balance check + creation run atomically under Serializable isolation so
     // concurrent double-taps cannot overdraw the venue (one retry on conflict).
     let cashout: any = null;
@@ -272,17 +363,19 @@ export class CashoutsService {
               `Insufficient available balance (available ${balance.availableMinor} kobo)`,
             );
           }
-          // Auto-cashout: create as CONFIRMED and execute immediately —
-          // the owner's password + sufficient balance is the only gate.
+          // Hybrid model: clean small payouts CONFIRM and execute at once;
+          // held payouts sit PENDING for manual approval via confirmCashout.
+          const auto = !policy.requiresApproval;
           return tx.cashout.create({
             data: {
               venueId: dto.venueId,
               bankAccountId: bankAccount.id,
               amountMinor: dto.amountMinor,
-              status: 'CONFIRMED',
+              status: auto ? 'CONFIRMED' : 'PENDING',
               clientReference: dto.clientReference,
-              confirmedAt: new Date(),
-              reviewedAt: new Date(),
+              confirmedBy: auto ? 'auto-policy' : undefined,
+              confirmedAt: auto ? new Date() : undefined,
+              reviewedAt: auto ? new Date() : undefined,
             },
             include: { bankAccount: true },
           });
@@ -302,13 +395,46 @@ export class CashoutsService {
       }
     }
 
-    return this.executeTransfer(cashout, bankAccount);
+    if (policy.requiresApproval) {
+      await this.notifyCashout(
+        dto.venueId,
+        'Cashout pending approval',
+        `₦${Math.round(dto.amountMinor / 100).toLocaleString('en-NG')} held for review: ${policy.reasons.join('; ')}.`,
+        dto.amountMinor,
+        cashout.id,
+      );
+      return {
+        ...cashout,
+        requiresApproval: true,
+        reasons: policy.reasons,
+        message: 'Cashout queued for manual approval under platform policy.',
+      };
+    }
+
+    const result: any = await this.executeTransfer(cashout, bankAccount);
+    if (result?.status === 'COMPLETED') {
+      await this.notifyCashout(
+        dto.venueId,
+        'Cashout completed',
+        `₦${Math.round(dto.amountMinor / 100).toLocaleString('en-NG')} sent to ${bankAccount.accountName} (${bankAccount.accountNumber}).`,
+        dto.amountMinor,
+        result.providerTransferRef || cashout.id,
+      );
+    } else if (result?.status === 'FAILED') {
+      await this.notifyCashout(
+        dto.venueId,
+        'Cashout failed',
+        `₦${Math.round(dto.amountMinor / 100).toLocaleString('en-NG')} could not be sent (${result.failureReason || 'transfer failed'}). Funds remain available — please retry.`,
+        dto.amountMinor,
+        cashout.id,
+      );
+    }
+    return result;
   }
 
   /**
-   * Owner/admin confirms a *pending* cashout with their password (back-compat).
-   * New flow auto-executes on `requestCashout`, so this is only needed for
-   * cashouts created before that change.
+   * Confirms a pending cashout with owner/admin password — the manual approval
+   * path for policy-held (PENDING) cashouts and legacy pre-change rows.
    */
   async confirmCashout(dto: ConfirmCashoutDto, adminPassword: string) {
     const cashout = await this.prisma.cashout.findUnique({
@@ -334,7 +460,25 @@ export class CashoutsService {
       include: { bankAccount: true },
     });
 
-    return this.executeTransfer(confirmed, bank);
+    const result: any = await this.executeTransfer(confirmed, bank);
+    if (result?.status === 'COMPLETED') {
+      await this.notifyCashout(
+        cashout.venueId,
+        'Cashout completed',
+        `₦${Math.round(cashout.amountMinor / 100).toLocaleString('en-NG')} sent to ${bank.accountName} (${bank.accountNumber}).`,
+        cashout.amountMinor,
+        result.providerTransferRef || cashout.id,
+      );
+    } else if (result?.status === 'FAILED') {
+      await this.notifyCashout(
+        cashout.venueId,
+        'Cashout failed',
+        `₦${Math.round(cashout.amountMinor / 100).toLocaleString('en-NG')} could not be sent (${result.failureReason || 'transfer failed'}). Funds remain available — please retry.`,
+        cashout.amountMinor,
+        cashout.id,
+      );
+    }
+    return result;
   }
 
   async rejectCashout(cashoutId: string, adminPassword: string, reason?: string) {
@@ -417,6 +561,8 @@ export class CashoutsService {
             ? 'COMPLETED'
             : verify.data.status === 'failed'
             ? 'FAILED'
+            : verify.data.status === 'reversed'
+            ? 'REVERSED'
             : c.status;
         if (finalStatus === c.status) {
           skipped++;
@@ -428,15 +574,87 @@ export class CashoutsService {
             data: {
               status: finalStatus,
               ...(finalStatus === 'COMPLETED' ? { completedAt: new Date() } : {}),
-              ...(finalStatus === 'FAILED' ? { failedAt: new Date(), failureReason: verify.data.status } : {}),
+              ...(finalStatus === 'FAILED'
+                ? { failedAt: new Date(), failureReason: verify.data.status }
+                : {}),
+              ...(finalStatus === 'REVERSED'
+                ? { failedAt: new Date(), failureReason: 'transfer reversed by provider' }
+                : {}),
             },
           }),
         );
+        if (finalStatus === 'FAILED') {
+          await this.notifyCashout(
+            c.venueId,
+            'Cashout failed',
+            `₦${Math.round(c.amountMinor / 100).toLocaleString('en-NG')} could not be sent. Funds remain available — please retry.`,
+            c.amountMinor,
+            c.id,
+          );
+        } else if (finalStatus === 'REVERSED') {
+          await this.notifyCashout(
+            c.venueId,
+            'Cashout reversed',
+            `₦${Math.round(c.amountMinor / 100).toLocaleString('en-NG')} transfer was reversed. Flagged for review.`,
+            c.amountMinor,
+            c.id,
+          );
+        }
       } catch (err: any) {
         this.logger.warn(`Reconcile skipped ${c.id}: ${err.message}`);
         skipped++;
       }
     }
     return { checked: stuck.length, finalized: finalized.length, skipped };
+  }
+
+  /**
+   * Finalizes a cashout from Paystack transfer webhooks
+   * (transfer.success / transfer.failed / transfer.reversed).
+   * FAILED returns funds to available (row leaves locked set);
+   * REVERSED flags the case for review.
+   */
+  async finalizeTransferEvent(transferCode: string, status: string) {
+    const cashout = await this.prisma.cashout.findFirst({
+      where: { providerTransferCode: transferCode },
+      include: { bankAccount: true },
+    });
+    if (!cashout) return { ok: false, error: 'unknown transfer code' };
+    if (['COMPLETED', 'FAILED', 'REVERSED', 'REJECTED'].includes(cashout.status)) {
+      return { ok: true, duplicate: true, status: cashout.status };
+    }
+
+    const s = (status || '').toLowerCase();
+    const finalStatus = s === 'success' ? 'COMPLETED' : s === 'reversed' ? 'REVERSED' : 'FAILED';
+    const updated = await this.prisma.cashout.update({
+      where: { id: cashout.id },
+      data: {
+        status: finalStatus,
+        ...(finalStatus === 'COMPLETED' ? { completedAt: new Date() } : {}),
+        ...(finalStatus !== 'COMPLETED'
+          ? { failedAt: new Date(), failureReason: `transfer ${s || 'unknown'}` }
+          : {}),
+      },
+      include: { bankAccount: true },
+    });
+
+    if (finalStatus === 'COMPLETED') {
+      await this.notifyCashout(
+        cashout.venueId,
+        'Cashout completed',
+        `₦${Math.round(cashout.amountMinor / 100).toLocaleString('en-NG')} sent to ${cashout.bankAccount?.accountName} (${cashout.bankAccount?.accountNumber}).`,
+        cashout.amountMinor,
+        updated.providerTransferRef || cashout.id,
+      );
+    } else {
+      await this.notifyCashout(
+        cashout.venueId,
+        finalStatus === 'REVERSED' ? 'Cashout reversed' : 'Cashout failed',
+        `₦${Math.round(cashout.amountMinor / 100).toLocaleString('en-NG')} transfer ${s || 'failed'}. ${finalStatus === 'REVERSED' ? 'Flagged for review.' : 'Funds remain available — please retry.'}`,
+        cashout.amountMinor,
+        cashout.id,
+      );
+    }
+    return { ok: true, status: finalStatus, cashoutId: cashout.id };
   }
 }
