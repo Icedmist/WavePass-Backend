@@ -157,4 +157,9 @@
 - [x] **Verification**: `tsc` clean; 55/55 vitest pass.
 - [x] PR [#48](https://github.com/Icedmist/WavePass-Backend/pull/48) merged to `main`.
 
+### 24. 48-Hour Admin JWT (Issue #44, PR #49)
+- [x] Default admin token expiry 2h → 48h in auth service and JwtModule, matching the app's operator session policy. Env override preserved.
+- [x] **Verification**: `tsc` clean; 55/55 vitest pass.
+- [x] PR [#49](https://github.com/Icedmist/WavePass-Backend/pull/49) merged to `main`.
+
 
