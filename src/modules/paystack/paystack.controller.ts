@@ -12,6 +12,16 @@ import { FastifyRequest } from 'fastify';
 import { PaystackService } from './paystack.service';
 import { PrismaService } from '../../common/prisma.service';
 import { PaymentFulfilmentQueue } from '../jobs/payment-fulfilment.queue';
+import { AdminService } from '../admin/admin.service';
+
+const REVERSAL_EVENTS = new Set([
+  'refund.pending',
+  'refund.processed',
+  'refund.failed',
+  'charge.dispute.create',
+  'charge.dispute.remind',
+  'charge.dispute.resolve',
+]);
 
 @Controller('payments/paystack')
 export class PaystackController {
@@ -19,6 +29,7 @@ export class PaystackController {
     private readonly paystack: PaystackService,
     private readonly prisma: PrismaService,
     private readonly fulfilmentQueue: PaymentFulfilmentQueue,
+    private readonly admin?: AdminService,
   ) {}
 
   @Throttle({ strict: { ttl: 60000, limit: 10 } })
@@ -116,6 +127,12 @@ export class PaystackController {
 
     if (body?.event === 'charge.success') {
       await this.fulfilmentQueue.enqueue({ reference: body.data.reference });
+    }
+
+    // Reversals (refunds, disputes): revoke unused access, flag consumed ones.
+    if (body?.event && REVERSAL_EVENTS.has(body.event)) {
+      const result = await this.admin?.handlePaymentReversal(body.event, body.data || {});
+      return { received: true, reversal: result || { ok: false, error: 'admin unavailable' } };
     }
 
     return { received: true };

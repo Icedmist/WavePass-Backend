@@ -4,6 +4,7 @@ import { PaystackService } from '../paystack/paystack.service';
 import { MikrotikProvisioningQueue } from '../mikrotik/mikrotik-provisioning.queue';
 import { VenuesService } from '../venues/venues.service';
 import { CashoutsService } from '../cashouts/cashouts.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class AdminService implements OnModuleInit, OnModuleDestroy {
@@ -16,6 +17,7 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
     private readonly venuesService: VenuesService,
     private readonly provisioningQueue: MikrotikProvisioningQueue,
     private readonly cashouts?: CashoutsService,
+    private readonly notifications?: NotificationsService,
   ) {}
 
   onModuleInit() {
@@ -555,6 +557,273 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
         redeemPct: issued ? Math.round((redeemed / issued) * 100) : 0,
       },
       daily: [...dailyMap.values()],
+    };
+  }
+
+  // ── Reversals (refunds, disputes) ────────────────────────────────────────
+  // PRD §18: revoke future access when unused; flag consumed cases for
+  // manual review; never delete records.
+
+  async handlePaymentReversal(event: string, data: any) {
+    const ref =
+      data?.transaction_reference || data?.reference || data?.data?.reference || null;
+    const txId = data?.transaction_id ?? data?.id ?? null;
+    if (!ref && txId == null) {
+      return { ok: false, error: 'reversal without reference' };
+    }
+
+    const payment = await this.prisma.payment.findFirst({
+      where: {
+        OR: [
+          ...(ref ? [{ providerReference: String(ref) }] : []),
+          ...(txId != null ? [{ providerTransactionId: String(txId) }] : []),
+        ],
+      },
+      include: {
+        order: { include: { plan: true, venue: true } },
+        vouchers: true,
+      },
+    });
+    if (!payment) {
+      await this.logAudit({
+        action: 'REVERSAL_UNKNOWN_PAYMENT',
+        category: 'PAYMENT',
+        actor: 'paystack_webhook',
+        details: { event, ref },
+        status: 'FAILURE',
+      });
+      return { ok: false, error: 'unknown payment reference' };
+    }
+
+    if (event === 'refund.failed') {
+      await this.logAudit({
+        action: 'REFUND_FAILED',
+        category: 'PAYMENT',
+        actor: 'paystack_webhook',
+        details: { event, reference: payment.providerReference },
+      });
+      return { ok: true, action: 'noted', paymentId: payment.id };
+    }
+
+    const isRefund = event.startsWith('refund.');
+    const nextStatus = isRefund ? 'REFUNDED' : 'REVERSED';
+    const revoked: string[] = [];
+    let needsReview = false;
+
+    for (const v of payment.vouchers) {
+      // Unused = never claimed for real use (no first login recorded).
+      const unused =
+        (v.status === 'ACTIVE' || v.status === 'ISSUED' || v.status === 'GENERATED') &&
+        !v.firstLoginAt;
+      if (unused) {
+        await this.prisma.voucher.update({
+          where: { id: v.id },
+          data: { status: 'REVOKED', revokedAt: new Date() },
+        });
+        revoked.push(v.id);
+      } else if (v.status === 'REDEEMED' || v.status === 'CONSUMED' || v.firstLoginAt) {
+        needsReview = true;
+      }
+    }
+
+    await this.prisma.payment.update({
+      where: { id: payment.id },
+      data: { status: nextStatus as any },
+    });
+
+    await this.logAudit({
+      action: isRefund ? 'PAYMENT_REFUNDED' : 'PAYMENT_DISPUTED',
+      category: 'PAYMENT',
+      actor: 'paystack_webhook',
+      details: {
+        event,
+        reference: payment.providerReference,
+        revokedVouchers: revoked,
+        needsReview,
+      },
+      status: needsReview ? 'REVIEW' : 'SUCCESS',
+    });
+
+    try {
+      await this.notifications?.create({
+        venueId: payment.order.venueId,
+        type: 'PAYMENT',
+        title: isRefund ? 'Refund processed' : 'Payment disputed',
+        body: `${payment.order.plan?.name || 'Pass'} (${payment.providerReference}): ${revoked.length} unused voucher(s) revoked${needsReview ? '; consumed access flagged for manual review' : ''}.`,
+        amountMinor: payment.amountMinor,
+        reference: payment.providerReference,
+      });
+    } catch {}
+
+    return {
+      ok: true,
+      action: needsReview ? 'revoked_unused_flagged_review' : 'revoked_unused',
+      paymentId: payment.id,
+      revokedVouchers: revoked,
+      needsReview,
+    };
+  }
+
+  // ── Manual Review Queue (PRD §20) ──────────────────────────────────────────
+
+  async getReviewQueue(venueId?: string) {
+    const stuckSince = new Date(Date.now() - 30 * 60 * 1000);
+    const [refundRequired, stuckProvisioning, failedPayments, reversedPayments] = await Promise.all([
+      this.prisma.order.findMany({
+        where: { status: 'REFUND_REQUIRED', ...(venueId ? { venueId } : {}) },
+        include: { plan: true, venue: { select: { id: true, name: true } }, payment: true },
+        orderBy: { createdAt: 'desc' },
+        take: 100,
+      }),
+      this.prisma.order.findMany({
+        where: {
+          status: { in: ['PROVISIONING', 'PAID'] },
+          createdAt: { lt: stuckSince },
+          ...(venueId ? { venueId } : {}),
+        },
+        include: { plan: true, venue: { select: { id: true, name: true } }, payment: true },
+        orderBy: { createdAt: 'desc' },
+        take: 100,
+      }),
+      this.prisma.payment.findMany({
+        where: {
+          status: { in: ['FAILED', 'ABANDONED'] },
+          ...(venueId ? { order: { venueId } } : {}),
+        },
+        include: { order: { include: { plan: true, venue: { select: { id: true, name: true } } } } },
+        orderBy: { createdAt: 'desc' },
+        take: 100,
+      }),
+      this.prisma.payment.findMany({
+        where: {
+          status: { in: ['REVERSED', 'REFUNDED'] },
+          ...(venueId ? { order: { venueId } } : {}),
+        },
+        include: {
+          order: { include: { plan: true, venue: { select: { id: true, name: true } } } },
+          vouchers: { select: { id: true, status: true, firstLoginAt: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 100,
+      }),
+    ]);
+
+    const counts = {
+      refundRequired: refundRequired.length,
+      stuckProvisioning: stuckProvisioning.length,
+      failedPayments: failedPayments.length,
+      reversedPayments: reversedPayments.length,
+      total:
+        refundRequired.length +
+        stuckProvisioning.length +
+        failedPayments.length +
+        reversedPayments.length,
+    };
+    return {
+      counts,
+      refundRequired,
+      stuckProvisioning,
+      failedPayments,
+      reversedPayments,
+    };
+  }
+
+  // ── Metrics (PRD §21) ──────────────────────────────────────────────────────
+
+  async getMetrics(days = 7) {
+    const windowDays = Math.min(Math.max(days || 7, 1), 90);
+    const since = new Date(Date.now() - windowDays * 86400000);
+
+    const [
+      initiated,
+      fulfilled,
+      failed,
+      webhookEvents,
+      requeued,
+      sessions,
+      stuckProvisioning,
+      reversed,
+      venues,
+      dvas,
+      plans,
+      routers,
+    ] = await Promise.all([
+      this.prisma.order.count({ where: { createdAt: { gte: since } } }),
+      this.prisma.payment.count({ where: { status: 'FULFILLED', paidAt: { gte: since } } }),
+      this.prisma.payment.count({ where: { status: { in: ['FAILED', 'ABANDONED'] }, createdAt: { gte: since } } }),
+      this.prisma.webhookEvent.count({ where: { createdAt: { gte: since } } }),
+      this.prisma.webhookEvent.count({ where: { status: 'requeued', createdAt: { gte: since } } }),
+      this.prisma.session.count({ where: { startedAt: { gte: since } } }),
+      this.prisma.order.count({
+        where: { status: { in: ['PROVISIONING', 'PAID'] }, createdAt: { lt: new Date(Date.now() - 30 * 60 * 1000) } },
+      }),
+      this.prisma.payment.count({ where: { status: { in: ['REVERSED', 'REFUNDED'] }, createdAt: { gte: since } } }),
+      this.prisma.venue.count(),
+      this.prisma.virtualAccount.groupBy({ by: ['status'], _count: { status: true } }),
+      this.prisma.plan.count({ where: { active: true } }),
+      this.prisma.router.groupBy({ by: ['status'], _count: { status: true } }),
+    ]);
+
+    // Average payment-to-access latency (paidAt -> first session start).
+    let accessLatencySec: number | null = null;
+    try {
+      const sample = await this.prisma.order.findMany({
+        where: {
+          status: 'ACTIVE',
+          payment: { status: 'FULFILLED', paidAt: { gte: since } },
+        },
+        include: {
+          payment: { select: { paidAt: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 200,
+      });
+      const firstSessions = await this.prisma.session.findMany({
+        where: { orderId: { in: sample.map((o) => o.id) } },
+        select: { orderId: true, startedAt: true },
+        orderBy: { startedAt: 'asc' },
+      });
+      const startedByOrder = new Map<string, number>();
+      for (const s of firstSessions) {
+        if (s.orderId && !startedByOrder.has(s.orderId)) {
+          startedByOrder.set(s.orderId, new Date(s.startedAt).getTime());
+        }
+      }
+      const deltas: number[] = [];
+      for (const o of sample) {
+        const paid = o.payment?.paidAt ? new Date(o.payment.paidAt).getTime() : 0;
+        const started = startedByOrder.get(o.id) || 0;
+        if (paid > 0 && started >= paid) deltas.push((started - paid) / 1000);
+      }
+      if (deltas.length > 0) {
+        deltas.sort((a, b) => a - b);
+        accessLatencySec = Math.round(deltas[Math.floor(deltas.length / 2)]);
+      }
+    } catch {}
+
+    const dvaByStatus: Record<string, number> = {};
+    for (const g of dvas) dvaByStatus[g.status] = g._count.status;
+    const routerByStatus: Record<string, number> = {};
+    for (const g of routers) routerByStatus[g.status] = g._count.status;
+
+    const pct = (n: number, d: number) => (d > 0 ? Math.round((n / d) * 100) : 0);
+    return {
+      days: windowDays,
+      since: since.toISOString(),
+      payments: {
+        initiated,
+        fulfilled,
+        failed,
+        successPct: pct(fulfilled, initiated),
+        fulfilmentPct: pct(fulfilled, Math.max(initiated - failed, 0)),
+      },
+      webhooks: { received: webhookEvents, requeued, duplicatePct: pct(requeued, webhookEvents) },
+      provisioning: { sessions, stuckProvisioning },
+      reversals: { reversed },
+      accessLatencyMedianSec: accessLatencySec,
+      dvas: { byStatus: dvaByStatus },
+      routers: { byStatus: routerByStatus },
+      onboarding: { venues, activePlans: plans },
     };
   }
 

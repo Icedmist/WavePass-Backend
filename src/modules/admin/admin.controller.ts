@@ -104,6 +104,17 @@ export class AdminController {
     return this.admin.verifyReference(reference);
   }
 
+  @UseGuards(AdminAuthGuard)
+  @Get('review-queue')
+  reviewQueue(@Query('venueId') venueId?: string) {
+    return this.admin.getReviewQueue(venueId);
+  }
+
+  @Get('metrics')
+  metrics(@Query('days') days?: string) {
+    return this.admin.getMetrics(days ? parseInt(days, 10) : 7);
+  }
+
   @Get('funnel')
   funnel(@Query('venueId') venueId?: string, @Query('days') days?: string) {
     return this.admin.getFunnel(venueId, days ? parseInt(days, 10) : 7);
