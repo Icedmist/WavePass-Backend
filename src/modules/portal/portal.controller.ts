@@ -60,10 +60,24 @@ export class PortalController {
   @Get('retrieve-voucher')
   retrieveVoucher(
     @Query('mac') mac?: string,
+    @Query('q') q?: string,
     @Query('query') query?: string,
+    @Query('venue') venue?: string,
     @Query('venueId') venueId?: string,
+    @Query('phone') phone?: string,
+    @Query('reference') reference?: string,
+    @Query('sender') sender?: string,
   ) {
-    return this.portal.retrieveVoucher({ mac, q: query, venueId });
+    const effectiveQuery = q || query || phone || reference || sender;
+    const effectiveVenue = venueId || venue;
+    return this.portal.retrieveVoucher({
+      mac,
+      q: effectiveQuery,
+      venueId: effectiveVenue,
+      phone,
+      reference,
+      sender,
+    });
   }
 
   @Get('landing')
