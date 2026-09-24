@@ -448,9 +448,25 @@ export class PortalService {
       dataExhaustedPct: pct,
       dataExhausted: pct >= 100,
       paymentMethods: ['card', 'transfer', 'voucher'],
-      voucherAccess: true,
       router: session?.router || targetRouter,
-      reconnectUrl: `http://192.168.88.1/login?username=${encodeURIComponent(credUser)}&password=${encodeURIComponent(credUser)}`,
+      reconnectUrl: (() => {
+        const effectiveRouter = session?.router || targetRouter;
+        let hotspotHost = '10.5.50.1';
+        if (effectiveRouter?.endpoint) {
+          try {
+            const ep = effectiveRouter.endpoint.startsWith('http') ? effectiveRouter.endpoint : `http://${effectiveRouter.endpoint}`;
+            const u = new URL(ep);
+            if (u.hostname && u.hostname !== 'localhost' && u.hostname !== '127.0.0.1') {
+              hotspotHost = u.hostname;
+            }
+          } catch {}
+        } else if (deviceIp && (deviceIp.startsWith('192.168.88.') || deviceIp === '192.168.88.1')) {
+          hotspotHost = '192.168.88.1';
+        } else if (deviceIp && (deviceIp.startsWith('10.5.50.') || deviceIp === '10.5.50.1')) {
+          hotspotHost = '10.5.50.1';
+        }
+        return `http://${hotspotHost}/login?username=${encodeURIComponent(credUser)}&password=${encodeURIComponent(credUser)}`;
+      })(),
     };
   }
 
@@ -846,18 +862,104 @@ export class PortalService {
     };
   }
 
-  async retrieveVoucher(query: { mac?: string; q?: string; venueId?: string }) {
-    let mac = (query.mac || query.q || '').toUpperCase().trim();
-    const venueId = query.venueId;
+  async retrieveVoucher(query: {
+    mac?: string;
+    q?: string;
+    venueId?: string;
+    phone?: string;
+    reference?: string;
+    sender?: string;
+  }) {
+    const rawSearch = (query.q || query.phone || query.reference || query.sender || '').trim();
+    const rawMac = (query.mac || '').trim();
 
-    const isMac = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/.test(mac);
+    // 1. Resolve venue by ID or slug if provided
+    let venue: any = null;
+    const venueKey = query.venueId;
+    if (venueKey) {
+      try {
+        venue = await this.venuesService.getVenueBySlug(venueKey.toLowerCase().trim());
+      } catch {
+        try {
+          venue = await this.venuesService.getVenueById(venueKey);
+        } catch {}
+      }
+    }
+    const resolvedVenueId = venue?.id || (venueKey && venueKey.includes('-') && venueKey.length > 25 ? venueKey : undefined);
+    const venueFilter = resolvedVenueId ? { venueId: resolvedVenueId } : {};
 
-    if (isMac) {
+    // 2. Normalize MACs: caller MAC and potential query MAC
+    let callerMac: string | null = null;
+    if (rawMac && this.isGuestMac(rawMac)) {
+      callerMac = rawMac.replace(/-/g, ':').toUpperCase();
+    }
+
+    let searchMac: string | null = null;
+    if (rawSearch && this.isGuestMac(rawSearch)) {
+      searchMac = rawSearch.replace(/-/g, ':').toUpperCase();
+    }
+
+    const effectiveMac = callerMac || searchMac;
+
+    // Helper to format remaining time
+    const formatRemaining = (expiresAt: Date): string => {
+      const remainingMs = Math.max(0, expiresAt.getTime() - Date.now());
+      const totalSec = Math.floor(remainingMs / 1000);
+      const hours = Math.floor(totalSec / 3600);
+      const mins = Math.floor((totalSec % 3600) / 60);
+      const secs = totalSec % 60;
+      if (hours > 0) return `${hours}h ${mins}m`;
+      return `${mins}m ${secs}s`;
+    };
+
+    // Helper to safely format found voucher response and optionally re-bind to current device MAC
+    const returnFoundVoucher = async (v: any, fallbackPlanName?: string) => {
+      const durMs = (v.plan?.durationSeconds || 3600) * 1000;
+      const expTime = v.expiresAt ? v.expiresAt.getTime() : (v.redeemedAt ? v.redeemedAt.getTime() + durMs : Date.now() + durMs);
+      const expDate = new Date(expTime);
+
+      // Re-bind to caller's device MAC if provided and changed (vital for iOS Private MAC & device handover)
+      if (callerMac && v.redeemedMac !== callerMac) {
+        try {
+          await this.prisma.voucher.update({
+            where: { id: v.id },
+            data: { redeemedMac: callerMac, redeemedDeviceId: callerMac },
+          });
+          if (v.paymentId) {
+            const ord = await this.prisma.order.findFirst({ where: { payment: { id: v.paymentId } } });
+            if (ord) {
+              await this.provisioningQueue.enqueue({ orderId: ord.id }).catch(() => {});
+            }
+          }
+        } catch {}
+      }
+
+      const code = v.displayCodeEnc || v.codeHash?.slice(0, 6) || 'ACTIVE';
+      return {
+        found: true,
+        voucherCode: code,
+        username: code,
+        planName: v.plan?.name || fallbackPlanName || 'Active Plan',
+        expiresAt: expDate,
+        remainingSeconds: Math.max(0, Math.floor((expTime - Date.now()) / 1000)),
+        remainingFormatted: formatRemaining(expDate),
+        status: v.status || 'ACTIVE',
+        mac: callerMac || v.redeemedMac || undefined,
+      };
+    };
+
+    // 3. Search Strategy A: Lookup by MAC address (either callerMac or searchMac)
+    if (effectiveMac) {
+      const altMac = effectiveMac.replace(/:/g, '-');
       const activeVouchers = await this.prisma.voucher.findMany({
         where: {
-          redeemedMac: mac,
+          OR: [
+            { redeemedMac: effectiveMac },
+            { redeemedMac: altMac },
+            { redeemedDeviceId: effectiveMac },
+          ],
           status: { in: ['ACTIVE', 'REDEEMED'] },
-          ...(venueId ? { venueId } : {}),
+          ...venueFilter,
         },
         include: { plan: true },
         orderBy: { redeemedAt: 'desc' },
@@ -869,24 +971,20 @@ export class PortalService {
         const durMs = (v.plan?.durationSeconds || 3600) * 1000;
         const exp = v.expiresAt ? v.expiresAt.getTime() : (v.redeemedAt ? v.redeemedAt.getTime() + durMs : 0);
         if (exp > now) {
-          return {
-            found: true,
-            voucherCode: v.displayCodeEnc || v.codeHash.slice(0, 6),
-            planName: v.plan?.name,
-            expiresAt: new Date(exp),
-            remainingSeconds: Math.floor((exp - now) / 1000),
-            status: 'ACTIVE',
-          };
+          return returnFoundVoucher(v);
         }
       }
 
-      // Check pending bank transfer approval
+      // Check pending bank transfer order for this MAC
       const pendingOrder = await this.prisma.order.findFirst({
         where: {
-          customerRef: mac,
+          OR: [
+            { customerRef: effectiveMac },
+            { customerRef: altMac },
+          ],
           status: 'AWAITING_PAYMENT',
           paymentProvider: 'bank_transfer',
-          ...(venueId ? { venueId } : {}),
+          ...venueFilter,
         },
         include: { plan: true },
         orderBy: { createdAt: 'desc' },
@@ -903,29 +1001,155 @@ export class PortalService {
       }
     }
 
-    if (query.q) {
+    // 4. Search Strategy B: Lookup by Query (Code, Phone, Transfer Reference, Sender Name)
+    if (rawSearch) {
+      const cleanCode = rawSearch.toUpperCase().replace(/\s+/g, '');
+
+      // B1. Direct Voucher Code match (displayCodeEnc or codeHash)
       const v = await this.prisma.voucher.findFirst({
         where: {
           OR: [
-            { displayCodeEnc: query.q.trim() },
-            { codeHash: query.q.trim() },
+            { displayCodeEnc: cleanCode },
+            { codeHash: cleanCode },
+            { codeHash: { startsWith: cleanCode.toLowerCase() } },
           ],
+          ...venueFilter,
         },
         include: { plan: true },
       });
+
       if (v) {
-        return {
-          found: true,
-          voucherCode: v.displayCodeEnc || query.q.trim(),
-          planName: v.plan?.name,
-          status: v.status,
-        };
+        const durMs = (v.plan?.durationSeconds || 3600) * 1000;
+        const exp = v.expiresAt ? v.expiresAt.getTime() : (v.redeemedAt ? v.redeemedAt.getTime() + durMs : Date.now() + durMs);
+        if (exp > Date.now()) {
+          return returnFoundVoucher(v);
+        }
+      }
+
+      // B2. Payment Provider Reference match (e.g. TRF-..., BT-..., Paystack reference)
+      const payment = await this.prisma.payment.findFirst({
+        where: {
+          OR: [
+            { providerReference: { equals: rawSearch, mode: 'insensitive' } },
+            { providerReference: { contains: rawSearch, mode: 'insensitive' } },
+          ],
+        },
+        include: {
+          order: { include: { plan: true } },
+          vouchers: { include: { plan: true } },
+        },
+      });
+
+      if (payment) {
+        if (payment.vouchers && payment.vouchers.length > 0) {
+          const pv = payment.vouchers[0];
+          const durMs = (pv.plan?.durationSeconds || payment.order?.plan?.durationSeconds || 3600) * 1000;
+          const exp = pv.expiresAt ? pv.expiresAt.getTime() : (pv.redeemedAt ? pv.redeemedAt.getTime() + durMs : Date.now() + durMs);
+          if (exp > Date.now()) {
+            return returnFoundVoucher(pv, payment.order?.plan?.name);
+          }
+        }
+        if (payment.status === 'PENDING' || payment.order?.status === 'AWAITING_PAYMENT') {
+          return {
+            found: false,
+            pendingApproval: true,
+            planName: payment.order?.plan?.name,
+            amountMinor: payment.amountMinor,
+            message: 'Your transfer is pending approval by the venue owner. Wi-Fi will connect automatically once approved.',
+          };
+        }
+      }
+
+      // B3. Order match (by customerRef containing phone/ref, or ID)
+      const matchingOrders = await this.prisma.order.findMany({
+        where: {
+          OR: [
+            { id: rawSearch },
+            { customerRef: { contains: rawSearch, mode: 'insensitive' } },
+          ],
+          ...venueFilter,
+        },
+        include: {
+          plan: true,
+          payment: { include: { vouchers: { include: { plan: true } } } },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 3,
+      });
+
+      for (const ord of matchingOrders) {
+        if (ord.payment?.vouchers && ord.payment.vouchers.length > 0) {
+          const ov = ord.payment.vouchers[0];
+          const durMs = (ov.plan?.durationSeconds || ord.plan?.durationSeconds || 3600) * 1000;
+          const exp = ov.expiresAt ? ov.expiresAt.getTime() : (ov.redeemedAt ? ov.redeemedAt.getTime() + durMs : Date.now() + durMs);
+          if (exp > Date.now()) {
+            return returnFoundVoucher(ov, ord.plan?.name);
+          }
+        } else if (ord.status === 'AWAITING_PAYMENT') {
+          return {
+            found: false,
+            pendingApproval: true,
+            planName: ord.plan?.name,
+            amountMinor: ord.amountMinor,
+            message: 'Your transfer is pending approval by the venue owner. Wi-Fi will connect automatically once approved.',
+          };
+        }
+      }
+
+      // B4. Notification search for sender name / phone notes
+      const db = this.prisma as any;
+      if (db.notification && rawSearch.length >= 3) {
+        const notifs = await db.notification.findMany({
+          where: {
+            OR: [
+              { body: { contains: rawSearch, mode: 'insensitive' } },
+              { reference: { contains: rawSearch, mode: 'insensitive' } },
+            ],
+            ...venueFilter,
+          },
+          orderBy: { createdAt: 'desc' },
+          take: 3,
+        });
+
+        for (const notif of notifs) {
+          if (notif.reference?.startsWith('TRANSFER_APPROVAL:')) {
+            const parts = notif.reference.split(':');
+            const orderId = parts[1];
+            if (orderId) {
+              const ord = await this.prisma.order.findUnique({
+                where: { id: orderId },
+                include: {
+                  plan: true,
+                  payment: { include: { vouchers: { include: { plan: true } } } },
+                },
+              });
+              if (ord) {
+                if (ord.payment?.vouchers && ord.payment.vouchers.length > 0) {
+                  const nv = ord.payment.vouchers[0];
+                  const durMs = (nv.plan?.durationSeconds || ord.plan?.durationSeconds || 3600) * 1000;
+                  const exp = nv.expiresAt ? nv.expiresAt.getTime() : (nv.redeemedAt ? nv.redeemedAt.getTime() + durMs : Date.now() + durMs);
+                  if (exp > Date.now()) {
+                    return returnFoundVoucher(nv, ord.plan?.name);
+                  }
+                } else if (ord.status === 'AWAITING_PAYMENT') {
+                  return {
+                    found: false,
+                    pendingApproval: true,
+                    planName: ord.plan?.name,
+                    amountMinor: ord.amountMinor,
+                    message: 'Your transfer is pending approval by the venue owner. Wi-Fi will connect automatically once approved.',
+                  };
+                }
+              }
+            }
+          }
+        }
       }
     }
 
     return {
       found: false,
-      message: 'No active pass found. Please buy a pass or enter a valid voucher code.',
+      message: 'No active pass found. Please buy a pass or enter a valid voucher code or transfer reference.',
     };
   }
 }
