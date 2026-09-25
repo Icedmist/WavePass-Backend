@@ -101,6 +101,7 @@ export class PortalService {
       reference,
       amount,
       plan,
+      publicKey: (process.env.PAYSTACK_PUBLIC_KEY || '').trim(),
     };
   }
 
