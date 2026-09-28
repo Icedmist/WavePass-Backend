@@ -207,7 +207,7 @@ export class RoutersService {
 /ip hotspot profile add name="wavepass-profile" \\
   hotspot-address=10.5.50.1 \\
   dns-name="login.nexawavepass.com" \\
-  login-by=http-chap,http-pap,mac-cookie \\
+  login-by=mac,mac-cookie,http-chap,http-pap \\
   login-page="${frontendUrl}/portal"
 
 # 2. HotSpot Server Instance
@@ -241,7 +241,7 @@ export class RoutersService {
 
 # 6. Low-RAM Memory Auto-Cleanup Script & Scheduler (Mikhmon Parity)
 :if ([:len [/system/script find name="wavepass-cleanup"]] = 0) do={
-  /system script add name="wavepass-cleanup" source={/ip hotspot user remove [find comment="expired"]} comment="WavePass expired user purge"
+  /system script add name="wavepass-cleanup" source={/ip hotspot user remove [find comment="expired"]; /ip hotspot ip-binding remove [find type=bypassed comment~"expired"]} comment="WavePass expired user purge"
 }
 :if ([:len [/system/scheduler find name="wavepass-cleanup"]] = 0) do={
   /system scheduler add name="wavepass-cleanup" interval=2h on-event="wavepass-cleanup" comment="WavePass 2-hour user cleanup"

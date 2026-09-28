@@ -144,6 +144,72 @@ export class MikrotikAdapter {
     }
   }
 
+  async addIpBinding(
+    endpoint: string,
+    credentials: { username: string; password: string },
+    spec: { macAddress: string; type?: string; comment?: string },
+  ): Promise<void> {
+    const cleanMac = spec.macAddress.toUpperCase().trim();
+    const payload = {
+      'mac-address': cleanMac,
+      type: spec.type || 'bypassed',
+      comment: spec.comment || 'wavepass-bypassed',
+    };
+
+    let res = await fetch(`${endpoint}/rest/ip/hotspot/ip-binding`, {
+      method: 'PUT',
+      headers: {
+        Authorization: this.basicAuth(credentials.username, credentials.password),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(10000),
+    }).catch(() => null);
+
+    if (!res || res.status === 404 || res.status === 405) {
+      res = await fetch(`${endpoint}/rest/ip/hotspot/ip-binding/add`, {
+        method: 'POST',
+        headers: {
+          Authorization: this.basicAuth(credentials.username, credentials.password),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(10000),
+      }).catch(() => null);
+    }
+
+    if (res && !res.ok && res.status !== 400) {
+      this.logger.warn(`RouterOS add ip-binding failed for ${cleanMac}: ${res.status}`);
+    }
+  }
+
+  async removeIpBinding(
+    endpoint: string,
+    credentials: { username: string; password: string },
+    macAddress: string,
+  ): Promise<void> {
+    const cleanMac = macAddress.toUpperCase().trim();
+    try {
+      const res = await fetch(`${endpoint}/rest/ip/hotspot/ip-binding`, {
+        headers: { Authorization: this.basicAuth(credentials.username, credentials.password) },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) return;
+      const bindings = (await res.json()) as any[];
+      if (!Array.isArray(bindings)) return;
+      const target = bindings.find((b) => (b['mac-address'] || '').toUpperCase() === cleanMac);
+      if (target && target['.id']) {
+        await fetch(`${endpoint}/rest/ip/hotspot/ip-binding/${encodeURIComponent(target['.id'])}`, {
+          method: 'DELETE',
+          headers: { Authorization: this.basicAuth(credentials.username, credentials.password) },
+          signal: AbortSignal.timeout(5000),
+        });
+      }
+    } catch (err: any) {
+      this.logger.warn(`Failed to remove IP binding for ${cleanMac}: ${err.message}`);
+    }
+  }
+
   parseRouterOsDuration(uptimeStr?: string): number {
     if (!uptimeStr) return 0;
     let totalSec = 0;

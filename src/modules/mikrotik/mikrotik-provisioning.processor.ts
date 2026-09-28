@@ -129,6 +129,21 @@ export class MikrotikProvisioningProcessor extends WorkerHost {
           macAddress,
         },
       );
+      if (macAddress && typeof this.mikrotik.addIpBinding === 'function') {
+        try {
+          await this.mikrotik.addIpBinding(
+            router.endpoint,
+            this.getRouterCredentials(),
+            {
+              macAddress,
+              type: 'bypassed',
+              comment: `WP:${username}`,
+            },
+          );
+        } catch (ipErr: any) {
+          this.logger.warn(`Failed to add bypassed IP-binding for ${macAddress}: ${ipErr.message}`);
+        }
+      }
     } catch (err: any) {
       // Degrade, never fail the order: the cloud voucher is the source of
       // truth and stays usable via router-sync pull + portal code login.
@@ -230,6 +245,21 @@ export class MikrotikProvisioningProcessor extends WorkerHost {
           macAddress,
         },
       );
+      if (macAddress && typeof this.mikrotik.addIpBinding === 'function') {
+        try {
+          await this.mikrotik.addIpBinding(
+            router.endpoint,
+            this.getRouterCredentials(),
+            {
+              macAddress,
+              type: 'bypassed',
+              comment: `WP:${username}`,
+            },
+          );
+        } catch (ipErr: any) {
+          this.logger.warn(`Failed to add bypassed IP-binding for ${macAddress}: ${ipErr.message}`);
+        }
+      }
     } catch (err: any) {
       // Degrade, never fail the claim: the cloud voucher stays usable via
       // router-sync pull + portal code login; reconcile heals hardware later.

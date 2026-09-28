@@ -649,7 +649,16 @@ export class PortalService {
       commands.push(
         `  :if ([:len [/ip hotspot user find name="${code}"]] = 0) do={ /ip hotspot user add name="${code}" password="${code}" profile="${prof}" limit-uptime=${durStr}${macParam} comment="WavePass Cloud Sync" }`,
       );
+      if (v.redeemedMac) {
+        commands.push(
+          `  :if ([:len [/ip hotspot ip-binding find mac-address="${v.redeemedMac.toUpperCase()}"]] = 0) do={ /ip hotspot ip-binding add mac-address="${v.redeemedMac.toUpperCase()}" type=bypassed comment="WavePass:${code}" }`,
+        );
+      }
     }
+
+    commands.push(
+      `  :foreach b in=[/ip hotspot ip-binding find type=bypassed] do={ :local bc [/ip hotspot ip-binding get $b comment]; :if ([:len $bc] > 9) do={ :local bu [:pick $bc 9 [:len $bc]]; :if ([:len [/ip hotspot user find name=$bu]] = 0) do={ /ip hotspot ip-binding remove $b; } } };`,
+    );
 
     commands.push(`} on-error={ :log warning "WavePass cloud voucher sync partial error" }`);
     return commands.join('\n');
