@@ -4,6 +4,7 @@ import {
   Controller,
   Headers,
   HttpCode,
+  Logger,
   Post,
   Req,
 } from '@nestjs/common';
@@ -32,6 +33,8 @@ const TRANSFER_EVENTS = new Set([
 
 @Controller('payments/paystack')
 export class PaystackController {
+  private readonly logger = new Logger(PaystackController.name);
+
   constructor(
     private readonly paystack: PaystackService,
     private readonly prisma: PrismaService,
@@ -98,6 +101,22 @@ export class PaystackController {
     const rawBody = req.rawBody ?? Buffer.from(JSON.stringify(body));
     const signatureValid = this.paystack.verifyWebhookSignature(rawBody, signature);
     if (!signatureValid) {
+      const eventKey = `invalid_sig:${body?.event || 'unknown'}:${body?.data?.reference || Date.now()}:${Math.random().toString(36).slice(2, 7)}`;
+      try {
+        if (this.prisma?.webhookEvent?.create) {
+          await this.prisma.webhookEvent.create({
+            data: {
+              eventKey,
+              signatureValid: false,
+              payloadJson: body || {},
+              status: 'invalid_signature',
+            },
+          }).catch(() => {});
+        }
+      } catch {}
+      this.logger.warn(
+        `Paystack webhook signature verification failed for event: ${body?.event}, ref: ${body?.data?.reference}. Recorded trace under ${eventKey}.`,
+      );
       throw new BadRequestException('Invalid signature');
     }
 

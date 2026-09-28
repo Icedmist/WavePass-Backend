@@ -252,4 +252,84 @@ describe('CashoutsService policy engine', () => {
     const unknown: any = await svc.finalizeTransferEvent('TRF_NOPE', 'success');
     expect(unknown.ok).toBe(false);
   });
+
+  it('handles transfer status "otp" and marks failureReason with OTP_REQUIRED', async () => {
+    const prisma = mockPrisma();
+    const paystack = mockPaystack({
+      initiateTransfer: vi.fn(async () => ({
+        transfer_code: 'TRF_OTP',
+        reference: 'REF_OTP',
+        amount: 100000,
+        currency: 'NGN',
+        status: 'otp',
+      })),
+      verifyTransfer: vi.fn(async () => ({
+        status: true,
+        data: { status: 'otp', transfer_code: 'TRF_OTP', amount: 100000, recipient: { name: 'A' } },
+      })),
+    });
+    const svc = new CashoutsService(prisma, paystack);
+    const res: any = await svc.requestCashout({
+      venueId: 'venue-1',
+      amountMinor: 100000,
+      password: 'owner-secret',
+    } as any);
+
+    expect(res.status).toBe('PROCESSING');
+    expect(res.failureReason).toContain('OTP_REQUIRED');
+  });
+
+  it('finalizes OTP required cashout successfully with finalizeCashoutOtp', async () => {
+    const prisma = mockPrisma({
+      cashout: {
+        findUnique: vi.fn(async () => ({
+          id: 'co-otp-1',
+          status: 'PROCESSING',
+          providerTransferCode: 'TRF_OTP_CODE',
+          amountMinor: 100000,
+          venueId: 'venue-1',
+          bankAccount: { accountName: 'Test Owner', accountNumber: '1234567890' },
+        })),
+        update: vi.fn(async ({ data }: any) => ({ id: 'co-otp-1', ...data })),
+      },
+    });
+    const paystack = mockPaystack({
+      finalizeTransfer: vi.fn(async () => ({
+        status: 'success',
+        transfer_code: 'TRF_OTP_CODE',
+        amount: 100000,
+        reference: 'REF_FIN',
+      })),
+    });
+    const svc = new CashoutsService(prisma, paystack);
+    const res = await svc.finalizeCashoutOtp({ cashoutId: 'co-otp-1', otp: '123456' });
+
+    expect(res.ok).toBe(true);
+    expect(res.status).toBe('COMPLETED');
+    expect(paystack.finalizeTransfer).toHaveBeenCalledWith({
+      transferCode: 'TRF_OTP_CODE',
+      otp: '123456',
+    });
+  });
+
+  it('rejects mock mode in production environment', async () => {
+    const origEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      const prisma = mockPrisma();
+      const paystack = mockPaystack({
+        isMock: () => true,
+      });
+      const svc = new CashoutsService(prisma, paystack);
+      await expect(
+        svc.requestCashout({
+          venueId: 'venue-1',
+          amountMinor: 100000,
+          password: 'owner-secret',
+        } as any),
+      ).rejects.toThrow('Live Paystack key (PAYSTACK_SECRET_KEY) is missing or placeholder in production');
+    } finally {
+      process.env.NODE_ENV = origEnv;
+    }
+  });
 });

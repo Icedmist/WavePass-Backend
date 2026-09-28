@@ -43,6 +43,7 @@ export class VouchersService {
     if (!params.venueId || !params.planId) {
       throw new BadRequestException('venueId and planId are required');
     }
+    await this.sweepExpiredVouchers();
     const qty = Math.min(Math.max(Math.floor(params.quantity || 0), 1), 500);
 
     let codes: string[];
@@ -129,9 +130,25 @@ export class VouchersService {
     };
   }
 
+  /**
+   * Lazily flip past-due vouchers to EXPIRED (same pattern as sweepExpiredCodes in admin.service.ts).
+   */
+  async sweepExpiredVouchers() {
+    try {
+      await this.prisma.voucher.updateMany({
+        where: {
+          expiresAt: { lt: new Date() },
+          status: { in: ['ISSUED', 'GENERATED'] },
+        },
+        data: { status: 'EXPIRED' },
+      });
+    } catch {}
+  }
+
   /** Non-consuming existence check so apps can verify a code landed in cloud
    *  before presenting it as valid (never marks REDEEMED). */
   async check(code: string) {
+    await this.sweepExpiredVouchers();
     const normalized = normalizeCode(code);
     if (!normalized) throw new BadRequestException('Voucher code is required');
     const codeHash = hashCode(normalized);
@@ -149,6 +166,16 @@ export class VouchersService {
       venueName: (v as any).venue?.name || null,
       expiresAt: v.expiresAt,
     };
+  }
+
+  async listByVenue(venueId: string) {
+    await this.sweepExpiredVouchers();
+    return this.prisma.voucher.findMany({
+      where: { venueId },
+      include: { plan: true },
+      orderBy: { issuedAt: 'desc' },
+      take: 200,
+    });
   }
 
   /** Atomic single-use redemption. Two concurrent attempts cannot both succeed (PRD §23). */

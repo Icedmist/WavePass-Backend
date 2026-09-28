@@ -254,13 +254,77 @@ export class PortalService {
     let session: any = null;
 
     if (reference) {
-      const payment = await this.prisma.payment.findUnique({
+      let payment = await this.prisma.payment.findUnique({
         where: { providerReference: reference },
         include: {
           order: { include: { plan: true, venue: { include: { routers: true } } } },
           vouchers: { include: { plan: true } },
         },
       });
+
+      // Fallback verification: if payment exists but is still PENDING, re-verify with Paystack
+      // in case the webhook was delayed, dropped, or failed signature checks.
+      if (payment && payment.status === 'PENDING' && !this.paystack.isMock()) {
+        try {
+          const verified = await this.paystack.verifyTransaction(reference);
+          if (verified.data.status === 'success' && verified.data.amount >= payment.order.amountMinor) {
+            const { createHash, randomInt } = await import('crypto');
+            const mac = normalized || payment.order.customerRef || '';
+            const isMac = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/.test(mac);
+            const durationSec = payment.order.plan.durationSeconds || 3600;
+            const expiresAt = new Date(Date.now() + durationSec * 1000);
+            let voucherCode = '';
+            for (let attempt = 0; attempt < 5; attempt++) {
+              voucherCode = String(randomInt(100000, 1000000));
+              try {
+                await this.prisma.$transaction([
+                  this.prisma.payment.update({
+                    where: { id: payment.id },
+                    data: { status: 'FULFILLED', paidAt: new Date(), providerTransactionId: String(verified.data.id) },
+                  }),
+                  this.prisma.voucher.create({
+                    data: {
+                      venueId: payment.order.venueId,
+                      planId: payment.order.planId,
+                      paymentId: payment.id,
+                      codeHash: createHash('sha256').update(voucherCode).digest('hex'),
+                      displayCodeEnc: voucherCode,
+                      status: 'ACTIVE',
+                      issuedAt: new Date(),
+                      redeemedAt: new Date(),
+                      expiresAt,
+                      redeemedMac: isMac ? mac : null,
+                      redeemedDeviceId: isMac ? mac : null,
+                      createdBy: 'portal_reverify',
+                    },
+                  }),
+                  this.prisma.order.update({
+                    where: { id: payment.orderId },
+                    data: { status: 'PROVISIONING' },
+                  }),
+                ]);
+                try {
+                  await this.provisioningQueue.enqueue({ orderId: payment.orderId });
+                } catch {}
+                break;
+              } catch (err: any) {
+                if (err.code === 'P2002') continue;
+                break;
+              }
+            }
+            payment = (await this.prisma.payment.findUnique({
+              where: { id: payment.id },
+              include: {
+                order: { include: { plan: true, venue: { include: { routers: true } } } },
+                vouchers: { include: { plan: true } },
+              },
+            })) || payment;
+          }
+        } catch (err: any) {
+          this.logger.warn(`Reference verification on landing check error: ${err.message}`);
+        }
+      }
+
       if (payment) {
         if (!normalized && payment.order.customerRef) {
           normalized = (payment.order.customerRef || '').toUpperCase().trim();
@@ -530,6 +594,14 @@ export class PortalService {
     }
 
     const now = new Date();
+    await this.prisma.voucher.updateMany({
+      where: {
+        expiresAt: { lt: now },
+        status: { in: ['ISSUED', 'GENERATED'] },
+      },
+      data: { status: 'EXPIRED' },
+    }).catch(() => {});
+
     const vouchers = await this.prisma.voucher.findMany({
       where: {
         venueId: venue.id,

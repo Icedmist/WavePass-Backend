@@ -21,13 +21,19 @@ export class PaymentFulfilmentProcessor extends WorkerHost {
   }
 
   async process(job: Job<{ reference: string }>) {
-    const { reference } = job.data;
+    await this.fulfill(job.data.reference);
+  }
 
+  /**
+   * Core idempotent fulfilment logic. Can be invoked directly as fallback
+   * or via BullMQ worker.
+   */
+  async fulfill(reference: string) {
     // 1. Never trust the webhook payload alone — re-verify server-to-server.
     const verified = await this.paystack.verifyTransaction(reference);
     if (verified.data.status !== 'success') {
       this.logger.warn(`Reference ${reference} not successful: ${verified.data.status}`);
-      return;
+      return null;
     }
 
     const payment = await this.prisma.payment.findUnique({
@@ -36,17 +42,31 @@ export class PaymentFulfilmentProcessor extends WorkerHost {
     });
     if (!payment) {
       this.logger.error(`No local payment for reference ${reference}`);
-      return;
+      return null;
     }
 
-    // 2. Amount must match the server-locked order amount, not whatever Paystack "helpfully" echoes.
-    if (verified.data.amount !== payment.order.amountMinor) {
-      this.logger.error(`Amount mismatch on ${reference}: paid ${verified.data.amount}, expected ${payment.order.amountMinor}`);
+    // 2. Amount guard: prevent underpayment. If customer paid at least the locked order amount, allow fulfilment.
+    if (verified.data.amount < payment.order.amountMinor) {
+      this.logger.error(
+        `Amount underpayment on ${reference}: paid ${verified.data.amount}, expected ${payment.order.amountMinor}`,
+      );
       await this.prisma.order.update({
         where: { id: payment.orderId },
         data: { status: 'REFUND_REQUIRED' },
       });
-      return;
+      try {
+        await this.notifications.create({
+          venueId: payment.order.venueId,
+          type: 'PAYMENT',
+          title: 'Payment underpayment — refund required',
+          body: `Order ${payment.orderId} (${reference}) received ₦${(verified.data.amount / 100).toFixed(2)}, expected ₦${(payment.order.amountMinor / 100).toFixed(2)}. Marked REFUND_REQUIRED.`,
+          amountMinor: verified.data.amount,
+          reference,
+        });
+      } catch (err: any) {
+        this.logger.warn(`Failed to dispatch underpayment notification: ${err.message}`);
+      }
+      return null;
     }
 
     // 3. Atomic, exactly-once fulfilment. A payment already FULFILLED short-circuits here.
@@ -103,7 +123,7 @@ export class PaymentFulfilmentProcessor extends WorkerHost {
       });
     });
 
-    if (!fulfilled) return;
+    if (!fulfilled) return null;
 
     // Venue-owner notification (notification bar source) — best effort, never blocks fulfilment.
     try {
@@ -129,5 +149,7 @@ export class PaymentFulfilmentProcessor extends WorkerHost {
     } catch (err: any) {
       this.logger.warn(`Provisioning enqueue failed for order ${payment.orderId}: ${err.message}. Voucher is already ACTIVE for router-sync.`);
     }
+
+    return fulfilled;
   }
 }

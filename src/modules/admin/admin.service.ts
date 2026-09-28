@@ -234,6 +234,15 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
         data: { status: 'EXPIRED', endedAt: new Date() },
       });
 
+      // Proactively sweep past-due unsold vouchers
+      await this.prisma.voucher.updateMany({
+        where: {
+          expiresAt: { lt: new Date() },
+          status: { in: ['ISSUED', 'GENERATED'] },
+        },
+        data: { status: 'EXPIRED' },
+      }).catch(() => {});
+
       return { ok: true, foundExpired: expired.length, removed };
     } catch (err: any) {
       return { ok: false, error: `Cleanup failed: ${err.message}` };

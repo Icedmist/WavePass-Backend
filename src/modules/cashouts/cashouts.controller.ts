@@ -47,6 +47,12 @@ export class CashoutsController {
     return this.cashouts.confirmCashout(dto, dto.adminPassword);
   }
 
+  /** Finalize a PROCESSING cashout that requires Paystack OTP confirmation. */
+  @Post('finalize-otp')
+  finalizeOtp(@Body() body: { cashoutId: string; otp: string }) {
+    return this.cashouts.finalizeCashoutOtp(body);
+  }
+
   @Post(':id/reject')
   reject(
     @Param('id') id: string,

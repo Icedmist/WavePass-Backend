@@ -149,6 +149,11 @@ export class CashoutsService {
 
   private async executeTransfer(cashout: any, bank: any) {
     if (this.paystack.isMock()) {
+      if (process.env.NODE_ENV === 'production') {
+        throw new BadRequestException(
+          'Live Paystack key (PAYSTACK_SECRET_KEY) is missing or placeholder in production. Real cashouts cannot be executed in mock mode.',
+        );
+      }
       return this.prisma.cashout.update({
         where: { id: cashout.id },
         data: {
@@ -184,6 +189,8 @@ export class CashoutsService {
       reason: `WavePass cashout → ${bank.accountName} (${bank.accountNumber})`,
     });
 
+    const isOtpRequired = transfer.status === 'otp';
+
     const processing = await this.prisma.cashout.update({
       where: { id: cashout.id },
       data: {
@@ -191,23 +198,52 @@ export class CashoutsService {
         providerTransferCode: transfer.transfer_code,
         providerTransferRef: transfer.reference,
         processedAt: new Date(),
+        ...(isOtpRequired ? { failureReason: 'OTP_REQUIRED: Paystack transfer requires OTP confirmation' } : {}),
       },
       include: { bankAccount: true },
     });
 
+    if (isOtpRequired) {
+      await this.notifyCashout(
+        cashout.venueId,
+        'Cashout requires OTP',
+        `₦${Math.round(cashout.amountMinor / 100).toLocaleString('en-NG')} transfer requires OTP confirmation. Provide OTP or disable transfer OTP in Paystack Dashboard → Settings → Preferences.`,
+        cashout.amountMinor,
+        transfer.reference || cashout.id,
+      );
+      return processing;
+    }
+
     try {
       const verify = await this.paystack.verifyTransfer(transfer.transfer_code);
+      const vStatus = verify?.data?.status;
+
+      if (vStatus === 'otp') {
+        await this.notifyCashout(
+          cashout.venueId,
+          'Cashout requires OTP',
+          `₦${Math.round(cashout.amountMinor / 100).toLocaleString('en-NG')} transfer requires OTP confirmation. Provide OTP or disable transfer OTP in Paystack Dashboard → Settings → Preferences.`,
+          cashout.amountMinor,
+          transfer.reference || cashout.id,
+        );
+        return this.prisma.cashout.update({
+          where: { id: cashout.id },
+          data: { failureReason: 'OTP_REQUIRED: Paystack transfer requires OTP confirmation' },
+          include: { bankAccount: true },
+        });
+      }
+
       const finalStatus =
-        verify.data.status === 'success'
+        vStatus === 'success'
           ? 'COMPLETED'
-          : verify.data.status === 'failed'
+          : vStatus === 'failed'
           ? 'FAILED'
           : processing.status;
       return this.prisma.cashout.update({
         where: { id: cashout.id },
         data: {
           status: finalStatus,
-          ...(finalStatus === 'COMPLETED' ? { completedAt: new Date() } : {}),
+          ...(finalStatus === 'COMPLETED' ? { completedAt: new Date(), failureReason: null } : {}),
           ...(finalStatus === 'FAILED' ? { failedAt: new Date(), failureReason: verify.data.status } : {}),
         },
         include: { bankAccount: true },
@@ -215,6 +251,59 @@ export class CashoutsService {
     } catch (err: any) {
       this.logger.warn(`Could not finalise transfer ${transfer.transfer_code}: ${err.message}`);
       return processing;
+    }
+  }
+
+  /**
+   * Finalizes a PROCESSING cashout with Paystack using an OTP.
+   */
+  async finalizeCashoutOtp(dto: { cashoutId: string; otp: string }) {
+    if (!dto.cashoutId || !dto.otp) {
+      throw new BadRequestException('cashoutId and otp are required');
+    }
+    const cashout = await this.prisma.cashout.findUnique({
+      where: { id: dto.cashoutId },
+      include: { bankAccount: true },
+    });
+    if (!cashout) throw new NotFoundException(`Cashout ${dto.cashoutId} not found`);
+    if (cashout.status !== 'PROCESSING') {
+      throw new BadRequestException(`Cashout is not in PROCESSING state (current: ${cashout.status})`);
+    }
+    if (!cashout.providerTransferCode) {
+      throw new BadRequestException('Cashout has no transfer code to finalize');
+    }
+
+    try {
+      const res = await this.paystack.finalizeTransfer({
+        transferCode: cashout.providerTransferCode,
+        otp: dto.otp,
+      });
+
+      const s = (res?.status || '').toLowerCase();
+      const finalStatus = s === 'success' ? 'COMPLETED' : s === 'failed' ? 'FAILED' : 'PROCESSING';
+      const updated = await this.prisma.cashout.update({
+        where: { id: cashout.id },
+        data: {
+          status: finalStatus,
+          ...(finalStatus === 'COMPLETED' ? { completedAt: new Date(), failureReason: null } : {}),
+          ...(finalStatus === 'FAILED' ? { failedAt: new Date(), failureReason: 'OTP finalization failed' } : {}),
+        },
+        include: { bankAccount: true },
+      });
+
+      if (finalStatus === 'COMPLETED') {
+        await this.notifyCashout(
+          cashout.venueId,
+          'Cashout completed',
+          `₦${Math.round(cashout.amountMinor / 100).toLocaleString('en-NG')} sent to ${cashout.bankAccount?.accountName} (${cashout.bankAccount?.accountNumber}).`,
+          cashout.amountMinor,
+          updated.providerTransferRef || cashout.id,
+        );
+      }
+      return { ok: true, status: finalStatus, cashout: updated };
+    } catch (err: any) {
+      this.logger.error(`Failed to finalize cashout OTP for ${cashout.id}: ${err.message}`);
+      throw new BadRequestException(`Paystack OTP finalization failed: ${err.message}`);
     }
   }
 
@@ -556,6 +645,23 @@ export class CashoutsService {
       }
       try {
         const verify = await this.paystack.verifyTransfer(c.providerTransferCode);
+        if (verify.data.status === 'otp') {
+          if (!c.failureReason?.includes('OTP_REQUIRED')) {
+            await this.prisma.cashout.update({
+              where: { id: c.id },
+              data: { failureReason: 'OTP_REQUIRED: Paystack transfer requires OTP confirmation' },
+            });
+            await this.notifyCashout(
+              c.venueId,
+              'Cashout requires OTP',
+              `₦${Math.round(c.amountMinor / 100).toLocaleString('en-NG')} transfer requires OTP confirmation. Enter OTP in Cashouts or disable OTP in Paystack Dashboard → Settings → Preferences.`,
+              c.amountMinor,
+              c.id,
+            );
+          }
+          skipped++;
+          continue;
+        }
         const finalStatus =
           verify.data.status === 'success'
             ? 'COMPLETED'

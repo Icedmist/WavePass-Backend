@@ -20,6 +20,11 @@ export class VouchersController {
     return this.vouchers.check(code);
   }
 
+  @Get()
+  list(@Query('venueId') venueId?: string) {
+    return this.vouchers.listByVenue(venueId || '');
+  }
+
   @Post(':code/redeem')
   redeem(
     @Param('code') code: string,

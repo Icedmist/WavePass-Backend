@@ -203,6 +203,36 @@ export class PaystackService {
     }>(`/transfer/verify/${encodeURIComponent(transferCode)}`);
   }
 
+  /**
+   * Finalize a transfer that requires OTP confirmation.
+   * https://paystack.com/docs/transfers/single-transfers#finalize-a-transfer
+   */
+  async finalizeTransfer(params: { transferCode: string; otp: string }) {
+    const data = await this.post<{
+      status: boolean;
+      message: string;
+      data: { status: string; transfer_code: string; amount: number; reference: string };
+    }>('/transfer/finalize_transfer', {
+      transfer_code: params.transferCode,
+      otp: params.otp,
+    });
+    return data.data;
+  }
+
+  /**
+   * Request an OTP to disable OTP requirement for transfers on Paystack business account.
+   */
+  async disableOtp() {
+    return this.post<{ status: boolean; message: string }>('/transfer/disable_otp', {});
+  }
+
+  /**
+   * Finalize disabling OTP requirement for transfers using the OTP received.
+   */
+  async disableOtpFinalize(otp: string) {
+    return this.post<{ status: boolean; message: string }>('/transfer/disable_otp_finalize', { otp });
+  }
+
   /** Platform settlement balance available for cashouts (kobo). */
   async checkBalance() {
     const data = await this.get<{ status: boolean; data: { currency: string; balance: number }[] }>(
