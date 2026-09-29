@@ -195,5 +195,9 @@
 - [x] **Cashout policy**: min floor, auto cap with PENDING hybrid approval, dispute holds, REVERSED state, verifiedAt, transfer webhooks, owner alerts, review-queue + metrics blocks.
 - [x] **Verification**: `tsc` clean; 75/75 vitest pass.
 - [x] PR [#59](https://github.com/Icedmist/WavePass-Backend/pull/59) merged to `main`.
-
-
+### 31. Build Fixes & Unit Test Suites (Issue #62, PR #63)
+- [x] **Bug**: CI and deployment build workflows failed due to missing `Query` import in `vouchers.controller.ts` and test file inclusion during `nest build`.
+- [x] **Fix**: Added missing `Query` import to `@nestjs/common` in `vouchers.controller.ts`; configured `tsconfig.build.json` to exclude test files; fixed strict union types in `test/portal-retrieve-voucher.spec.ts`.
+- [x] **Unit Tests**: Added 52 new unit tests across 7 test suites covering `VouchersController`, `CashoutsController`, `VenuesService`, `PlansService`, `OrdersController`, `HealthController`, and `VouchersService` extra edge cases.
+- [x] **Verification**: `nest build` clean (0 errors); 140/140 vitest pass across 24 test suites.
+- [x] PR [#63](https://github.com/Icedmist/WavePass-Backend/pull/63) merged to `main`.
