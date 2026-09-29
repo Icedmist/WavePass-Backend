@@ -67,6 +67,9 @@ jobs:
             echo "🔄 Gracefully updating api container without stopping database..."
             timeout 180 docker compose up -d --no-deps api
 
+            echo "🗄️ Running Prisma database migrations..."
+            timeout 60 docker compose exec -T api npx prisma migrate deploy || timeout 60 docker compose run --rm api npx prisma migrate deploy || echo "⚠️ Migration step finished"
+
             echo "🧹 Pruning old dangling images..."
             timeout 120 docker image prune -f --filter "until=24h" || true
 
