@@ -40,7 +40,7 @@ describe('PortalService.retrieveVoucher iPhone & Universal Retrieval Tests', () 
 
     const service = makeService(prisma);
     // Passing MAC with dashes (common in RouterOS / iOS)
-    const res = await service.retrieveVoucher({ mac: '00-11-22-33-44-55', venueId: 'flagship' });
+    const res: any = await service.retrieveVoucher({ mac: '00-11-22-33-44-55', venueId: 'flagship' });
     expect(res.found).toBe(true);
     expect(res.voucherCode).toBe('987654');
     expect(res.status).toBe('ACTIVE');
@@ -86,7 +86,7 @@ describe('PortalService.retrieveVoucher iPhone & Universal Retrieval Tests', () 
 
     const service = makeService(prisma);
     // iPhone queries with new Private MAC and their phone number in query
-    const res = await service.retrieveVoucher({
+    const res: any = await service.retrieveVoucher({
       mac: '12:34:56:78:9A:BC',
       q: '08012345678',
       venueId: 'flagship',
@@ -127,7 +127,7 @@ describe('PortalService.retrieveVoucher iPhone & Universal Retrieval Tests', () 
     };
 
     const service = makeService(prisma);
-    const res = await service.retrieveVoucher({
+    const res: any = await service.retrieveVoucher({
       q: 'TRF-MK81-ABCD',
       venueId: 'flagship',
     });
@@ -156,7 +156,7 @@ describe('PortalService.retrieveVoucher iPhone & Universal Retrieval Tests', () 
     };
 
     const service = makeService(prisma);
-    const res = await service.retrieveVoucher({
+    const res: any = await service.retrieveVoucher({
       mac: '00:11:22:33:44:55',
       venueId: 'flagship',
     });
