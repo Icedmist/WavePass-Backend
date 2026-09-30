@@ -28,34 +28,16 @@ async function bootstrap() {
   );
 
   app.setGlobalPrefix('api/v1');
-  const rawAllowList = (process.env.FRONTEND_URL || 'https://nexawavepass.com').split(',').map((s) => s.trim()).filter(Boolean);
-  const allowedHosts = rawAllowList.map((u) => {
-    try {
-      return new URL(u).host.toLowerCase();
-    } catch {
-      return u.toLowerCase().replace(/^https?:\/\//, '').split('/')[0];
-    }
-  });
   app.enableCors({
     origin: (origin: string | undefined, cb: (err: Error | null, allow?: boolean) => void) => {
-      if (!origin) return cb(null, true);
-      try {
-        const host = new URL(origin).host.toLowerCase();
-        const isLocal = host.startsWith('localhost') || host.startsWith('127.0.0.1');
-        const isAllowed = allowedHosts.some((h) => {
-          const clean = h.toLowerCase();
-          if (clean.startsWith('*.')) return host.endsWith(clean.slice(1)) || host === clean.slice(2);
-          return host === clean || host.endsWith('.' + clean);
-        });
-        if (isLocal || isAllowed) return cb(null, true);
-        return cb(new Error('Not allowed by CORS'), false);
-      } catch {
-        return cb(null, true);
-      }
+      // Always allow requests and reflect the origin (supports captive portals on local router domains,
+      // e.g. nuru.net, 192.168.88.1, as well as *.nexawavepass.com).
+      // Never pass an Error to cb() as that causes Fastify to return HTTP 500 on OPTIONS preflights.
+      cb(null, true);
     },
     credentials: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
-    allowedHeaders: 'Content-Type, Authorization, x-paystack-signature',
+    allowedHeaders: 'Content-Type, Authorization, x-paystack-signature, Accept, Origin, X-Requested-With',
   });
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
 
