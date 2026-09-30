@@ -121,4 +121,69 @@ describe('VirtualAccountsService mock-row replacement', () => {
     expect(res.accountNumber).toBe('PENDING');
     expect(res.status).toBe('PENDING');
   });
+
+  it('scopes customer email to venue id and slug so venues with identical names have distinct emails', async () => {
+    const prisma = mockPrisma(null);
+    const paystack: any = {
+      isMock: () => false,
+      createCustomer: vi.fn(async (email: string) => {
+        expect(email).toBe('venue.cafe.venue-1@nexawavepass.com');
+        return { customer_code: 'cus_unique_venue_1' };
+      }),
+      createDedicatedAccount: vi.fn(async () => ({
+        id: 101,
+        account_number: '9817850001',
+        account_name: 'NEXAWAVEPASS/CAFE',
+        bank: { name: 'Wema Bank', slug: 'wema-bank' },
+      })),
+    };
+    const svc = new VirtualAccountsService(prisma, paystack, venues);
+    const res = await svc.ensureForVenue('venue-1');
+
+    expect(paystack.createCustomer).toHaveBeenCalledWith(
+      'venue.cafe.venue1@nexawavepass.com',
+      expect.anything(),
+    );
+    expect(res.accountNumber).toBe('9817850001');
+  });
+
+  it('detects and replaces a collided active DVA that was shared with another venue', async () => {
+    const collidedRow = {
+      id: 'va-collided',
+      venueId: 'venue-2',
+      status: 'ACTIVE',
+      accountNumber: '9817850525', // Already claimed by venue-1
+      bankName: 'Wema Bank',
+      metadata: { providerId: 40430777 },
+    };
+    const prisma: any = {
+      virtualAccount: {
+        findUnique: vi.fn(async () => collidedRow),
+        // Returns the other venue that already owns this account number
+        findFirst: vi.fn(async () => ({ id: 'va-original', venueId: 'venue-1', accountNumber: '9817850525' })),
+        create: vi.fn(async ({ data }: any) => ({ id: 'va-new-unique', ...data })),
+        update: vi.fn(async ({ data }: any) => ({ ...collidedRow, ...data })),
+        delete: vi.fn(async () => collidedRow),
+      },
+    };
+    const paystack: any = {
+      isMock: () => false,
+      createCustomer: vi.fn(async () => ({ customer_code: 'cus_unique_venue_2' })),
+      createDedicatedAccount: vi.fn(async () => ({
+        id: 102,
+        account_number: '9817852419', // Fresh dedicated account
+        account_name: 'NEXAWAVEPASS/VENUE TWO',
+        bank: { name: 'Wema Bank', slug: 'wema-bank' },
+      })),
+    };
+    const venuesMock: any = {
+      getVenueById: vi.fn(async () => ({ id: 'venue-2', name: 'Test', slug: 'test-2' })),
+    };
+    const svc = new VirtualAccountsService(prisma, paystack, venuesMock);
+    const res = await svc.ensureForVenue('venue-2');
+
+    expect(prisma.virtualAccount.delete).toHaveBeenCalledWith({ where: { venueId: 'venue-2' } });
+    expect(paystack.createDedicatedAccount).toHaveBeenCalled();
+    expect(res.accountNumber).toBe('9817852419');
+  });
 });

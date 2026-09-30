@@ -40,9 +40,13 @@ export class VirtualAccountsService {
     return va;
   }
 
-  private likelyMailTo(venueName: string): string {
-    const slug = venueName.toLowerCase().replace(/[^a-z0-9]+/g, '.');
-    return `venue.${slug || 'wavepass'}@nexawavepass.com`;
+  private likelyMailTo(venue: { id: string; slug?: string; name: string }): string {
+    const slug = (venue.slug || venue.name)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    const shortId = venue.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8);
+    return `venue.${slug || 'wp'}.${shortId}@nexawavepass.com`;
   }
 
   /** Stale rows from the mock era (or failed activations) must never shadow
@@ -58,21 +62,48 @@ export class VirtualAccountsService {
   }
 
   /** Ensure a DVA exists for a venue — idempotent and race-safe. PENDING rows
-   *  from earlier failed attempts are retried instead of returned forever. */
+   *  from earlier failed attempts and collided accounts are retried instead of returned forever. */
   async ensureForVenue(venueId: string, opts?: { email?: string; phone?: string; preferredBank?: string }) {
     const existing = await this.prisma.virtualAccount.findUnique({ where: { venueId } });
-    if (existing && existing.status === 'ACTIVE' && (this.paystack.isMock() || !this.isMockRow(existing))) {
+
+    // Check if another venue already claims this account number (shared/collided DVA from duplicate venue names)
+    const isCollidedWithAnotherVenue =
+      existing &&
+      existing.accountNumber &&
+      existing.accountNumber !== 'PENDING' &&
+      !this.paystack.isMock()
+        ? await this.prisma.virtualAccount.findFirst({
+            where: {
+              accountNumber: existing.accountNumber,
+              venueId: { not: venueId },
+            },
+          })
+        : null;
+
+    if (
+      existing &&
+      existing.status === 'ACTIVE' &&
+      !isCollidedWithAnotherVenue &&
+      (this.paystack.isMock() || !this.isMockRow(existing))
+    ) {
       return existing;
     }
-    if (existing && this.isMockRow(existing) && !this.paystack.isMock()) {
-      // Stale mock-era or PENDING row: drop it so a real Paystack DVA takes its place.
-      // No real money ever sat behind mock numbers, so deletion is safe.
+
+    if (
+      existing &&
+      (this.isMockRow(existing) || isCollidedWithAnotherVenue) &&
+      !this.paystack.isMock()
+    ) {
+      // Stale mock-era, PENDING row, or collided DVA from duplicate names: drop it
+      // so a real, unique Paystack DVA takes its place.
       try {
         await this.prisma.virtualAccount.delete({ where: { venueId } });
       } catch (err: any) {
         if (err.code !== 'P2025') throw err;
       }
-      this.logger.log(`Removed stale mock/pending DVA for venue ${venueId}; provisioning a live one.`);
+      this.logger.log(
+        `Removed stale/collided DVA for venue ${venueId}; provisioning a dedicated one.`,
+      );
     } else if (existing && this.paystack.isMock()) {
       return existing;
     }
@@ -82,7 +113,7 @@ export class VirtualAccountsService {
       return this.createMock(venue.id, venue.name);
     }
 
-    const email = opts?.email || this.likelyMailTo(venue.name);
+    const email = opts?.email || this.likelyMailTo(venue);
 
     // Format first_name, last_name, and phone required by CBN / Paystack DVA compliance
     const parts = (venue.name || 'WavePass Venue').trim().split(/\s+/);
