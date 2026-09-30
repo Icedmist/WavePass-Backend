@@ -201,3 +201,19 @@
 - [x] **Unit Tests**: Added 52 new unit tests across 7 test suites covering `VouchersController`, `CashoutsController`, `VenuesService`, `PlansService`, `OrdersController`, `HealthController`, and `VouchersService` extra edge cases.
 - [x] **Verification**: `nest build` clean (0 errors); 140/140 vitest pass across 24 test suites.
 - [x] PR [#63](https://github.com/Icedmist/WavePass-Backend/pull/63) merged to `main`.
+
+### 32. Mobile App Version & Direct APK Download Endpoints (Issue #64, PR #65)
+- [x] **AppReleaseService (`src/modules/app/app-release.service.ts`)**:
+  - Implemented multi-tier fallback release resolution:
+    1. Environment variable overrides (`APP_LATEST_VERSION`, `APP_DOWNLOAD_URL`).
+    2. Public distribution repository (`Icedmist/WavePass-App`) via GitHub Releases API.
+    3. Source repository (`Icedmist/WavePass-Android`) via GitHub Releases API.
+    4. 5-minute in-memory caching to guard against GitHub rate limits.
+    5. Deterministic fallback metadata when offline.
+- [x] **AppReleaseController (`src/modules/app/app-release.controller.ts`)**:
+  - `GET /api/v1/app/version`: Returns release version metadata, download URL, release notes, and timestamp.
+  - `GET /api/v1/app/download`: HTTP 302 redirect directly to the latest APK binary download.
+- [x] **Verification**:
+  - `pnpm run build`: Clean build (`nest build`).
+  - `pnpm test`: 146/146 vitest pass across 25 suites (including 6 new unit tests in `test/app-release.spec.ts`).
+- [x] PR [#65](https://github.com/Icedmist/WavePass-Backend/pull/65) merged to `main`.
