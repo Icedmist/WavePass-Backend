@@ -217,3 +217,17 @@
   - `pnpm run build`: Clean build (`nest build`).
   - `pnpm test`: 146/146 vitest pass across 25 suites (including 6 new unit tests in `test/app-release.spec.ts`).
 - [x] PR [#65](https://github.com/Icedmist/WavePass-Backend/pull/65) merged to `main`.
+
+### 33. Paystack DVA Name & Phone Compliance & Stale PENDING Auto-Healing (Issue #66, PR #67)
+- [x] **Root Cause Analysis**:
+  - Wallet screen displayed `PENDING ACTIVATION` because Paystack's `POST /dedicated_account` API strictly requires `first_name`, `last_name`, and a customer `phone` under Nigerian banking/CBN KYC requirements.
+  - Previous customer creation only passed `first_name`, omitting `last_name` and `phone`, and reused a global `findFirst` customer code across venues, causing Paystack 400 validation failures and falling back to `accountNumber: 'PENDING'`.
+- [x] **Fix & Modernization**:
+  - Added `put` method and `updateCustomer` to `PaystackService`, and extended `createCustomer` to accept phone numbers.
+  - In `VirtualAccountsService.ensureForVenue`: parsed venue name into compliant `first_name` and `last_name`, formatted normalized Nigerian phone number, and provisioned dedicated virtual account with Wema Bank.
+  - Stale `PENDING` rows are automatically upgraded to active accounts upon retrieval or refresh.
+- [x] **Unit Testing & Verification**:
+  - Added comprehensive tests in `test/virtual-accounts.spec.ts` asserting customer parameter compliance and PENDING upgrading.
+  - `nest build`: Clean build (0 errors).
+  - `vitest`: 148/148 tests passing across 25 suites.
+- [x] PR [#67](https://github.com/Icedmist/WavePass-Backend/pull/67) merged to `main`.
