@@ -52,6 +52,8 @@ import { CashoutsController } from './modules/cashouts/cashouts.controller';
 import { CashoutsService } from './modules/cashouts/cashouts.service';
 
 import { HealthController } from './modules/health/health.controller';
+import { AppReleaseController } from './modules/app/app-release.controller';
+import { AppReleaseService } from './modules/app/app-release.service';
 
 @Module({
   imports: [
@@ -99,6 +101,7 @@ import { HealthController } from './modules/health/health.controller';
     CashoutsController,
     NotificationsController,
     HealthController,
+    AppReleaseController,
   ],
   providers: [
     {
@@ -125,6 +128,7 @@ import { HealthController } from './modules/health/health.controller';
     VirtualAccountsService,
     CashoutsService,
     NotificationsService,
+    AppReleaseService,
   ],
 })
 export class AppModule {}
