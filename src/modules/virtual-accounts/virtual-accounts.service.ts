@@ -59,20 +59,20 @@ export class VirtualAccountsService {
 
   /** Ensure a DVA exists for a venue — idempotent and race-safe. PENDING rows
    *  from earlier failed attempts are retried instead of returned forever. */
-  async ensureForVenue(venueId: string, opts?: { email?: string; preferredBank?: string }) {
+  async ensureForVenue(venueId: string, opts?: { email?: string; phone?: string; preferredBank?: string }) {
     const existing = await this.prisma.virtualAccount.findUnique({ where: { venueId } });
     if (existing && existing.status === 'ACTIVE' && (this.paystack.isMock() || !this.isMockRow(existing))) {
       return existing;
     }
     if (existing && this.isMockRow(existing) && !this.paystack.isMock()) {
-      // Stale mock-era row: drop it so a real Paystack DVA takes its place.
+      // Stale mock-era or PENDING row: drop it so a real Paystack DVA takes its place.
       // No real money ever sat behind mock numbers, so deletion is safe.
       try {
         await this.prisma.virtualAccount.delete({ where: { venueId } });
       } catch (err: any) {
         if (err.code !== 'P2025') throw err;
       }
-      this.logger.log(`Removed stale mock DVA for venue ${venueId}; provisioning a live one.`);
+      this.logger.log(`Removed stale mock/pending DVA for venue ${venueId}; provisioning a live one.`);
     } else if (existing && this.paystack.isMock()) {
       return existing;
     }
@@ -84,29 +84,35 @@ export class VirtualAccountsService {
 
     const email = opts?.email || this.likelyMailTo(venue.name);
 
+    // Format first_name, last_name, and phone required by CBN / Paystack DVA compliance
+    const parts = (venue.name || 'WavePass Venue').trim().split(/\s+/);
+    const firstName = parts[0] || 'WavePass';
+    const lastName = parts.slice(1).join(' ') || 'Venue';
+    const rawPhone = opts?.phone || process.env.SUPPORT_PHONE || '+2348012345678';
+    const cleanPhone = rawPhone.startsWith('+')
+      ? rawPhone
+      : rawPhone.startsWith('0')
+        ? `+234${rawPhone.slice(1)}`
+        : `+234${rawPhone}`;
+
     let customer: { customer_code: string };
     try {
-      const existingCustomer = await this.prisma.virtualAccount.findFirst({
-        where: { customerCode: { not: null } },
+      const cust = await this.paystack.createCustomer(email, {
+        first_name: firstName,
+        last_name: lastName,
+        phone: cleanPhone,
       });
-      customer = existingCustomer
-        ? { customer_code: existingCustomer.customerCode! }
-        : await this.paystack.createCustomer(email, { first_name: venue.name });
-    } catch (err: any) {
-      this.logger.warn(`Could not fetch existing customer for venue: ${err.message}; creating new customer`);
-      try {
-        customer = await this.paystack.createCustomer(email, { first_name: venue.name });
-      } catch (custErr: any) {
-        this.logger.warn(`Could not create customer on Paystack: ${custErr.message}`);
-        customer = { customer_code: `cus_local_${venue.id.slice(0, 8)}` };
-      }
+      customer = { customer_code: cust.customer_code };
+    } catch (custErr: any) {
+      this.logger.warn(`Could not create/retrieve customer on Paystack: ${custErr.message}`);
+      customer = { customer_code: `cus_local_${venue.id.slice(0, 8)}` };
     }
 
     let dva: any = null;
     try {
       dva = await this.paystack.createDedicatedAccount({
         customer: customer.customer_code,
-        preferredBank: opts?.preferredBank,
+        preferredBank: opts?.preferredBank || 'wema-bank',
         metadata: { venueId: venue.id, venueSlug: venue.slug, platform: 'nexa-wavepass' },
       });
     } catch (dvaErr: any) {
@@ -117,23 +123,15 @@ export class VirtualAccountsService {
       return this.upsertPending(venue.id, venue.name, customer.customer_code);
     }
 
-    try {
-      return await this.upsertActive(venue.id, {
-        customerCode: customer.customer_code,
-        accountNumber: String(dva.account_number),
-        accountName: dva.account_name || venue.name,
-        bankName: dva.bank?.name || 'Wema Bank',
-        splitCode: (dva as any).split_code || undefined,
-        status: 'ACTIVE',
-        metadata: { providerId: dva.id },
-      });
-    } catch (err: any) {
-      if (err.code === 'P2002') {
-        // Lost a create race — return the winner's row.
-        return this.prisma.virtualAccount.findUniqueOrThrow({ where: { venueId: venue.id } });
-      }
-      throw err;
-    }
+    return this.upsertActive(venue.id, {
+      customerCode: customer.customer_code,
+      accountNumber: String(dva.account_number),
+      accountName: dva.account_name || venue.name,
+      bankName: dva.bank?.name || 'Wema Bank',
+      splitCode: (dva as any).split_code || undefined,
+      status: 'ACTIVE',
+      metadata: { providerId: dva.id, bankSlug: dva.bank?.slug || 'wema-bank' },
+    });
   }
 
   /** Signed-in cash-pass sellers can top-up a venue's DVA on the app admin panel. */
@@ -144,6 +142,7 @@ export class VirtualAccountsService {
     }
     return this.ensureForVenue(dto.venueId, {
       email: dto.email,
+      phone: dto.phone,
       preferredBank: dto.preferredBank,
     });
   }
@@ -163,10 +162,15 @@ export class VirtualAccountsService {
         },
       });
     } catch (err: any) {
-      if (err.code === 'P2002') {
-        return this.prisma.virtualAccount.findUniqueOrThrow({ where: { venueId } });
-      }
-      throw err;
+      if (err.code !== 'P2002') throw err;
+      return this.prisma.virtualAccount.update({
+        where: { venueId },
+        data: {
+          customerCode,
+          status: 'PENDING',
+          metadata: { note: 'DVA pending activation or KYC on Paystack' },
+        },
+      });
     }
   }
 
@@ -196,10 +200,8 @@ export class VirtualAccountsService {
         },
       });
     } catch (err: any) {
-      if (err.code === 'P2002') {
-        return this.prisma.virtualAccount.findUniqueOrThrow({ where: { venueId } });
-      }
-      throw err;
+      if (err.code !== 'P2002') throw err;
+      return this.prisma.virtualAccount.findUniqueOrThrow({ where: { venueId } });
     }
   }
 }

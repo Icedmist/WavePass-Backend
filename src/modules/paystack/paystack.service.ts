@@ -118,16 +118,42 @@ export class PaystackService {
     return res.json() as Promise<T>;
   }
 
+  private async put<T = any>(path: string, body: Record<string, unknown>): Promise<T> {
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${this.secretKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!res.ok) {
+      throw new InternalServerErrorException(
+        `Paystack ${path} failed (${res.status}): ${await res.text()}`,
+      );
+    }
+    return res.json() as Promise<T>;
+  }
+
   /**
    * Dedicated Virtual Account (DVA) — the platform owns ONE Paystack key and
    * creates a private payment account for each venue. Payments into a venue's
    * DVA settle straight into the platform settlement account.
    * https://paystack.com/docs/payments/dedicated-virtual-account
    */
-  async createCustomer(email: string, extra: { first_name?: string; last_name?: string }) {
+  async createCustomer(email: string, extra: { first_name?: string; last_name?: string; phone?: string }) {
     const data = await this.post<{ status: boolean; data: { customer_code: string; email: string } }>(
       '/customer',
       { email, ...extra },
+    );
+    return data.data;
+  }
+
+  async updateCustomer(customerCode: string, extra: { first_name?: string; last_name?: string; phone?: string }) {
+    const data = await this.put<{ status: boolean; data: any }>(
+      `/customer/${encodeURIComponent(customerCode)}`,
+      extra,
     );
     return data.data;
   }
