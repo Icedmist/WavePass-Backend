@@ -11,4 +11,8 @@ export class CreateVirtualAccountDto {
   @IsOptional()
   @IsString()
   preferredBank?: string;
+
+  @IsOptional()
+  @IsString()
+  phone?: string;
 }

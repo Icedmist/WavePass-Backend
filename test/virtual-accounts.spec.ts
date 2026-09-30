@@ -66,4 +66,59 @@ describe('VirtualAccountsService mock-row replacement', () => {
     expect(res).toBe(liveRow);
     expect(paystack.createDedicatedAccount).not.toHaveBeenCalled();
   });
+
+  it('passes first_name, last_name, and phone to Paystack createCustomer and upgrades PENDING rows', async () => {
+    const pendingRow = {
+      id: 'va-pending', venueId: 'venue-1', status: 'PENDING',
+      accountNumber: 'PENDING', bankName: 'Paystack Dedicated NUBAN (Pending)',
+      metadata: { note: 'pending' },
+    };
+    const prisma = mockPrisma(pendingRow);
+    const paystack: any = {
+      isMock: () => false,
+      createCustomer: vi.fn(async (_email: string, extra: any) => {
+        expect(extra.first_name).toBeDefined();
+        expect(extra.last_name).toBeDefined();
+        expect(extra.phone).toBeDefined();
+        return { customer_code: 'cus_live_with_phone' };
+      }),
+      createDedicatedAccount: vi.fn(async () => ({
+        id: 99,
+        account_number: '9817850525',
+        account_name: 'NEXAWAVEPASS/VENUE TEST',
+        bank: { name: 'Wema Bank', slug: 'wema-bank' },
+      })),
+    };
+    const svc = new VirtualAccountsService(prisma, paystack, venues);
+    const res = await svc.ensureForVenue('venue-1', { phone: '08012345678' });
+
+    expect(prisma.virtualAccount.delete).toHaveBeenCalledWith({ where: { venueId: 'venue-1' } });
+    expect(paystack.createCustomer).toHaveBeenCalledWith(
+      expect.stringContaining('@nexawavepass.com'),
+      expect.objectContaining({
+        first_name: 'Cafe',
+        last_name: 'Venue',
+        phone: '+2348012345678',
+      }),
+    );
+    expect(paystack.createDedicatedAccount).toHaveBeenCalled();
+    expect(res.accountNumber).toBe('9817850525');
+    expect(res.status).toBe('ACTIVE');
+  });
+
+  it('stores PENDING when Paystack DVA creation fails or returns no account number', async () => {
+    const prisma = mockPrisma(null);
+    const paystack: any = {
+      isMock: () => false,
+      createCustomer: vi.fn(async () => ({ customer_code: 'cus_new' })),
+      createDedicatedAccount: vi.fn(async () => {
+        throw new Error('Customer identification required');
+      }),
+    };
+    const svc = new VirtualAccountsService(prisma, paystack, venues);
+    const res = await svc.ensureForVenue('venue-1');
+
+    expect(res.accountNumber).toBe('PENDING');
+    expect(res.status).toBe('PENDING');
+  });
 });
