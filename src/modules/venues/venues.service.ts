@@ -135,9 +135,23 @@ export class VenuesService {
     };
   }
 
-  async getDefaultVenue() {    let venue = await this.prisma.venue.findFirst({
+  async getDefaultVenue() {
+    let venue = await this.prisma.venue.findFirst({
+      where: {
+        OR: [
+          { id: '0e65c025-480a-4a42-8c49-68b6f0b27712' },
+          { slug: 'flagship' },
+          { plans: { some: { active: true } } },
+        ],
+      },
       include: { routers: true, plans: { where: { active: true } } },
+      orderBy: { createdAt: 'asc' },
     });
+    if (!venue) {
+      venue = await this.prisma.venue.findFirst({
+        include: { routers: true, plans: { where: { active: true } } },
+      });
+    }
     if (!venue) {
       // Auto-bootstrap a default venue for seamless local demo and captive portal usage
       venue = await this.prisma.venue.create({
