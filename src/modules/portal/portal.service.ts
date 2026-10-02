@@ -39,7 +39,24 @@ export class PortalService {
       throw new NotFoundException(`Plan ${dto.planId} not found`);
     }
 
-    const venueId = dto.venueId || plan.venueId;
+    let venueId = plan.venueId;
+    if (dto.venueId && dto.venueId.trim() !== '' && dto.venueId !== 'null' && dto.venueId !== 'undefined') {
+      try {
+        const v = await this.prisma.venue.findFirst({
+          where: {
+            OR: [
+              { id: dto.venueId },
+              { slug: dto.venueId.toLowerCase().trim() },
+            ],
+          },
+        });
+        if (v) {
+          venueId = v.id;
+        }
+      } catch (_) {
+        venueId = plan.venueId;
+      }
+    }
     const amount = plan.priceMinor;
     const reference = `wp_hs_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const customerEmail = dto.email && dto.email.includes('@') && !dto.email.endsWith('.local')
@@ -820,7 +837,7 @@ export class PortalService {
       const plan = await this.plansService.getPlanById(planId);
       order = await this.prisma.order.create({
         data: {
-          venueId: dto.venueId,
+          venueId: plan.venueId,
           planId: plan.id,
           customerRef: dto.mac.toUpperCase().trim(),
           amountMinor: plan.priceMinor,
