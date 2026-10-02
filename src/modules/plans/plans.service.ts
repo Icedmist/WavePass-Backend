@@ -20,8 +20,27 @@ export class PlansService {
   constructor(private readonly prisma: PrismaService) {}
 
   async listPlans(venueId?: string) {
+    let resolvedVenueId = venueId;
+    if (venueId && venueId.trim() !== '' && venueId !== 'null' && venueId !== 'undefined') {
+      try {
+        const venue = await this.prisma.venue.findFirst({
+          where: {
+            OR: [
+              { id: venueId },
+              { slug: venueId.toLowerCase().trim() },
+            ],
+          },
+        });
+        if (venue) {
+          resolvedVenueId = venue.id;
+        }
+      } catch (_) {}
+    } else {
+      resolvedVenueId = undefined;
+    }
+
     const where: Record<string, unknown> = { active: true };
-    if (venueId) where.venueId = venueId;
+    if (resolvedVenueId) where.venueId = resolvedVenueId;
 
     const plans = await this.prisma.plan.findMany({
       where,
