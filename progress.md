@@ -231,3 +231,14 @@
   - `nest build`: Clean build (0 errors).
   - `vitest`: 148/148 tests passing across 25 suites.
 - [x] PR [#67](https://github.com/Icedmist/WavePass-Backend/pull/67) merged to `main`.
+
+### 34. Venue Slug Resolution in Portal Plans & initPayment Venue Foreign Key Protection (Issue #74, PR #75)
+- [x] **PlansService (`src/modules/plans/plans.service.ts`)**:
+  - `listPlans(venueId?: string)` now resolves venue slug or UUID to `Venue.id`. If a slug (e.g., `dan-musa-wifi`) is passed via `/api/v1/portal/plans?venueId=<slug>`, it looks up the venue and filters active plans by the resolved UUID, ensuring captive portals querying by venue slug receive the venue's live customized plans.
+- [x] **PortalService (`src/modules/portal/portal.service.ts`)**:
+  - In `initPayment`: resolves `dto.venueId` against both UUID and slug with safe fallback to `plan.venueId`. Prevents Prisma foreign key constraint violations on `Order.venueId` when captive portals submit payments.
+  - In bank transfer order creation: safely uses `plan.venueId` ensuring consistency across payment channels.
+- [x] **Verification**:
+  - `pnpm run build`: Clean build (0 errors).
+  - `pnpm test`: 150/150 tests passing across 25 suites.
+- [x] PR [#75](https://github.com/Icedmist/WavePass-Backend/pull/75) squashed and merged to `main` (commit `200b1ac`).
