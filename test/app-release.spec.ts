@@ -73,7 +73,7 @@ describe('AppReleaseModule unit tests', () => {
       const service = new AppReleaseService();
       const release = await service.getLatestRelease();
 
-      expect(release.version).toBe('1.0.1+2');
+      expect(release.version).toBe('1.0.3+4');
       expect(release.downloadUrl).toContain('app-release.apk');
       expect(release.source).toBe('fallback');
     });
