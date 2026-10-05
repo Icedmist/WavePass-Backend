@@ -242,3 +242,12 @@
   - `pnpm run build`: Clean build (0 errors).
   - `pnpm test`: 150/150 tests passing across 25 suites.
 - [x] PR [#75](https://github.com/Icedmist/WavePass-Backend/pull/75) squashed and merged to `main` (commit `200b1ac`).
+
+### 35. App Release Fallback Version Bump to 1.0.3+4 (Issue #77, PR #78)
+- [x] **AppReleaseService (`src/modules/app/app-release.service.ts`)**:
+  - Updated default offline fallback version to `1.0.3+4` matching client release version.
+- [x] **Verification**:
+  - `pnpm run build`: Clean build (0 errors).
+  - `pnpm test`: 150/150 vitest tests passed across 25 suites.
+- [x] PR [#78](https://github.com/Icedmist/WavePass-Backend/pull/78) squashed and merged to `main` (commit `c80f880`).
+
