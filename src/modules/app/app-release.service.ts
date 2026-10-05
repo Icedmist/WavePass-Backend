@@ -64,8 +64,8 @@ export class AppReleaseService {
 
     // 3. Fallback to default known configuration
     const fallbackRelease: AppReleaseInfo = {
-      version: '1.0.1+2',
-      latestVersion: '1.0.1+2',
+      version: '1.0.3+4',
+      latestVersion: '1.0.3+4',
       downloadUrl: `https://github.com/${this.primaryRepo}/releases/latest/download/app-release.apk`,
       releaseNotes: 'WavePass Mobile POS & Voucher Printing Client.',
       htmlUrl: `https://github.com/${this.primaryRepo}/releases`,
