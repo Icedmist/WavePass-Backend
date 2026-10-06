@@ -250,4 +250,17 @@
   - `pnpm run build`: Clean build (0 errors).
   - `pnpm test`: 150/150 vitest tests passed across 25 suites.
 - [x] PR [#78](https://github.com/Icedmist/WavePass-Backend/pull/78) squashed and merged to `main` (commit `c80f880`).
-
+### 36. Venue Plans Query Resolution, Payment Venue Attribution & Live Paystack Verification (Issue #80, PR #81)
+- [x] **PlansController & PortalController (`src/modules/plans/plans.controller.ts`, `src/modules/portal/portal.controller.ts`)**:
+  - Accept query parameters `venueId`, `venue`, `v`, and `slug` across plans and info endpoints.
+- [x] **PlansService & PortalService (`src/modules/plans/plans.service.ts`, `src/modules/portal/portal.service.ts`)**:
+  - `listPlans` and `getPortalPlans` resolve venue slug/UUID and auto-seed standard starter plans (`ensureDefaultPlans`) if a venue has no plans in the database yet, preventing default flagship fallback.
+  - `getPlanById` checks the venue scope first so that requests specifying a venue match venue plans and aliases (`plan_1h`, `plan_12h`, etc.) for that venue.
+  - `initPayment` strictly binds orders and payments to the requested venue, preventing default venue attribution.
+  - `retrieveVoucher` performs immediate live verification with Paystack for pending transactions, auto-fulfills vouchers, triggers owner notifications, and returns the voucher to the client immediately.
+- [x] **NotificationsService & SessionsService (`src/modules/notifications/notifications.service.ts`, `src/modules/sessions/sessions.service.ts`)**:
+  - Resolves venue slug or UUID to `Venue.id` for listing notifications, marking read, and listing active sessions.
+- [x] **Verification**:
+  - `pnpm run build`: Clean build (0 errors).
+  - `pnpm test`: 154/154 vitest tests passed across 26 suites.
+- [x] PR [#81](https://github.com/Icedmist/WavePass-Backend/pull/81) squashed and merged to `main` (commit `79ea7fa`).
