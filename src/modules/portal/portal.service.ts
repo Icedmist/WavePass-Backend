@@ -20,43 +20,74 @@ export class PortalService {
     private readonly provisioningQueue: MikrotikProvisioningQueue,
   ) {}
 
-  async getPortalPlans(venueId?: string) {
-    if (!venueId) {
-      const defaultVenue = await this.venuesService.getDefaultVenue();
-      venueId = defaultVenue.id;
+  async getPortalPlans(venueIdOrSlug?: string) {
+    let venue: any = null;
+    const cleanVenueTarget = (venueIdOrSlug || '').trim();
+    if (cleanVenueTarget && cleanVenueTarget !== 'null' && cleanVenueTarget !== 'undefined' && cleanVenueTarget !== 'venue') {
+      try {
+        venue = await this.venuesService.getVenueBySlug(cleanVenueTarget.toLowerCase());
+      } catch {
+        try {
+          venue = await this.venuesService.getVenueById(cleanVenueTarget);
+        } catch {
+          try {
+            venue = await this.prisma.venue.findFirst({
+              where: {
+                OR: [
+                  { id: cleanVenueTarget },
+                  { slug: cleanVenueTarget.toLowerCase() },
+                ],
+              },
+            });
+          } catch {}
+        }
+      }
     }
-    return this.plansService.listPlans(venueId);
+
+    if (!venue) {
+      venue = await this.venuesService.getDefaultVenue();
+    }
+
+    return this.plansService.listPlans(venue.id);
   }
 
   async initPayment(dto: InitPaymentDto) {
     const mac = dto.mac.toUpperCase();
 
-    // 1. Fetch and validate plan (amount locked server-side — PRD §4.4, §13)
+    // 1. Resolve target venue (by venueId, venue, or slug)
+    const rawVenueTarget = (dto.venueId || dto.venue || dto.slug || '').trim();
+    let targetVenue: any = null;
+    if (rawVenueTarget && rawVenueTarget !== 'null' && rawVenueTarget !== 'undefined' && rawVenueTarget !== 'venue') {
+      try {
+        targetVenue = await this.venuesService.getVenueBySlug(rawVenueTarget.toLowerCase());
+      } catch {
+        try {
+          targetVenue = await this.venuesService.getVenueById(rawVenueTarget);
+        } catch {
+          try {
+            targetVenue = await this.prisma.venue.findFirst({
+              where: {
+                OR: [
+                  { id: rawVenueTarget },
+                  { slug: rawVenueTarget.toLowerCase() },
+                ],
+              },
+            });
+          } catch {}
+        }
+      }
+    }
+
+    // 2. Fetch and validate plan (amount locked server-side — PRD §4.4, §13)
     let plan: any;
     try {
-      plan = await this.plansService.getPlanById(dto.planId);
+      plan = await this.plansService.getPlanById(dto.planId, targetVenue?.id);
     } catch {
       throw new NotFoundException(`Plan ${dto.planId} not found`);
     }
 
-    let venueId = plan.venueId;
-    if (dto.venueId && dto.venueId.trim() !== '' && dto.venueId !== 'null' && dto.venueId !== 'undefined') {
-      try {
-        const v = await this.prisma.venue.findFirst({
-          where: {
-            OR: [
-              { id: dto.venueId },
-              { slug: dto.venueId.toLowerCase().trim() },
-            ],
-          },
-        });
-        if (v) {
-          venueId = v.id;
-        }
-      } catch (_) {
-        venueId = plan.venueId;
-      }
-    }
+    // Ensure order belongs to resolved venue
+    const venueId = targetVenue?.id || plan.venueId;
     const amount = plan.priceMinor;
     const reference = `wp_hs_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const customerEmail = dto.email && dto.email.includes('@') && !dto.email.endsWith('.local')
@@ -683,13 +714,25 @@ export class PortalService {
 
   async getPortalVenueInfo(venueIdOrSlug?: string) {
     let venue: any = null;
-    if (venueIdOrSlug) {
+    const cleanVenueTarget = (venueIdOrSlug || '').trim();
+    if (cleanVenueTarget && cleanVenueTarget !== 'null' && cleanVenueTarget !== 'undefined' && cleanVenueTarget !== 'venue') {
       try {
-        venue = await this.venuesService.getVenueBySlug(venueIdOrSlug.toLowerCase().trim());
+        venue = await this.venuesService.getVenueBySlug(cleanVenueTarget.toLowerCase());
       } catch {
         try {
-          venue = await this.venuesService.getVenueById(venueIdOrSlug);
-        } catch {}
+          venue = await this.venuesService.getVenueById(cleanVenueTarget);
+        } catch {
+          try {
+            venue = await this.prisma.venue.findFirst({
+              where: {
+                OR: [
+                  { id: cleanVenueTarget },
+                  { slug: cleanVenueTarget.toLowerCase() },
+                ],
+              },
+            });
+          } catch {}
+        }
       }
     }
     if (!venue) {
@@ -1149,6 +1192,76 @@ export class PortalService {
           }
         }
         if (payment.status === 'PENDING' || payment.order?.status === 'AWAITING_PAYMENT') {
+          // If reference is a Paystack transaction, verify live with Paystack
+          if (payment.providerReference && !payment.providerReference.startsWith('TRF-') && !payment.providerReference.startsWith('BT-')) {
+            try {
+              const verifyRes: any = await this.paystack.verifyTransaction(payment.providerReference);
+              if (verifyRes?.data?.status === 'success') {
+                const { createHash, randomInt } = await import('crypto');
+                const durationSeconds = payment.order?.plan?.durationSeconds || 3600;
+                const expiresAt = new Date(Date.now() + durationSeconds * 1000);
+                for (let attempt = 0; attempt < 5; attempt++) {
+                  const voucherCode = String(randomInt(100000, 1000000));
+                  try {
+                    const createdVoucher = await this.prisma.$transaction(async (tx) => {
+                      await tx.payment.update({
+                        where: { id: payment.id },
+                        data: { status: 'FULFILLED', paidAt: new Date() },
+                      });
+                      await tx.order.update({
+                        where: { id: payment.orderId },
+                        data: { status: 'PAID' },
+                      });
+                      return tx.voucher.create({
+                        data: {
+                          venueId: payment.order.venueId,
+                          planId: payment.order.planId,
+                          paymentId: payment.id,
+                          codeHash: createHash('sha256').update(voucherCode).digest('hex'),
+                          displayCodeEnc: voucherCode,
+                          status: 'ACTIVE',
+                          issuedAt: new Date(),
+                          redeemedAt: new Date(),
+                          expiresAt,
+                          redeemedMac: effectiveMac || payment.order.customerRef || null,
+                          createdBy: 'paystack_retrieve_verification',
+                        },
+                        include: { plan: true },
+                      });
+                    });
+
+                    // Dispatch venue-owner notification
+                    try {
+                      const db = this.prisma as any;
+                      if (db.notification) {
+                        const ngn = (payment.amountMinor / 100).toLocaleString('en-NG', { style: 'currency', currency: 'NGN' });
+                        await db.notification.create({
+                          data: {
+                            venueId: payment.order.venueId,
+                            type: 'PAYMENT',
+                            title: `Payment received — ${ngn}`,
+                            body: `${payment.order?.plan?.name || 'Wi-Fi pass'} paid (${payment.providerReference}). Voucher ${voucherCode} is active.`,
+                            amountMinor: payment.amountMinor,
+                            reference: payment.providerReference,
+                          },
+                        });
+                      }
+                    } catch (_) {}
+
+                    try {
+                      await this.provisioningQueue.enqueue({ orderId: payment.orderId });
+                    } catch (_) {}
+
+                    return returnFoundVoucher(createdVoucher, payment.order?.plan?.name);
+                  } catch (err: any) {
+                    if (err.code === 'P2002') continue;
+                    break;
+                  }
+                }
+              }
+            } catch (_) {}
+          }
+
           return {
             found: false,
             pendingApproval: true,

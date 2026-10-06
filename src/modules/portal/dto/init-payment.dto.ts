@@ -17,4 +17,12 @@ export class InitPaymentDto {
   @IsOptional()
   @IsString()
   venueId?: string;
+
+  @IsOptional()
+  @IsString()
+  venue?: string;
+
+  @IsOptional()
+  @IsString()
+  slug?: string;
 }

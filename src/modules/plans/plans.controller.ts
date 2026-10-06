@@ -8,8 +8,13 @@ export class PlansController {
   constructor(private readonly plans: PlansService) {}
 
   @Get()
-  list(@Query('venueId') venueId?: string) {
-    return this.plans.listPlans(venueId);
+  list(
+    @Query('venueId') venueId?: string,
+    @Query('venue') venue?: string,
+    @Query('v') v?: string,
+    @Query('slug') slug?: string,
+  ) {
+    return this.plans.listPlans(venueId || venue || v || slug);
   }
 
   @Get(':id')

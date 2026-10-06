@@ -9,13 +9,23 @@ export class PortalController {
   constructor(private readonly portal: PortalService) {}
 
   @Get('plans')
-  plans(@Query('venueId') venueId?: string) {
-    return this.portal.getPortalPlans(venueId);
+  plans(
+    @Query('venueId') venueId?: string,
+    @Query('venue') venue?: string,
+    @Query('v') v?: string,
+    @Query('slug') slug?: string,
+  ) {
+    return this.portal.getPortalPlans(venueId || venue || v || slug);
   }
 
   @Get('info')
-  venueInfo(@Query('venue') venue?: string, @Query('venueId') venueId?: string) {
-    return this.portal.getPortalVenueInfo(venue || venueId);
+  venueInfo(
+    @Query('venue') venue?: string,
+    @Query('venueId') venueId?: string,
+    @Query('v') v?: string,
+    @Query('slug') slug?: string,
+  ) {
+    return this.portal.getPortalVenueInfo(venue || venueId || v || slug);
   }
 
   @Throttle({ portal: { ttl: 60000, limit: 20 } })

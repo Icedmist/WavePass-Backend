@@ -11,8 +11,27 @@ export class SessionsService {
   ) {}
 
   async listActiveSessions(venueId?: string) {
+    let resolvedVenueId = venueId;
+    if (venueId && venueId.trim() !== '' && venueId !== 'null' && venueId !== 'undefined' && venueId.trim() !== 'venue') {
+      const clean = venueId.trim();
+      try {
+        const v = await this.prisma.venue.findFirst({
+          where: {
+            OR: [
+              { id: clean },
+              { slug: clean.toLowerCase() },
+            ],
+          },
+          select: { id: true },
+        });
+        if (v) resolvedVenueId = v.id;
+      } catch (_) {}
+    } else {
+      resolvedVenueId = undefined;
+    }
+
     const where: any = { status: SessionStatus.ACTIVE };
-    if (venueId) where.venueId = venueId;
+    if (resolvedVenueId) where.venueId = resolvedVenueId;
 
     return this.prisma.session.findMany({
       where,
