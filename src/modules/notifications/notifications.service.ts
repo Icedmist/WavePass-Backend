@@ -81,8 +81,24 @@ export class NotificationsService {
     try {
       const db = this.prisma as any;
       if (!db.notification) return [];
+      let resolvedVenueId = venueId;
+      if (venueId && venueId.trim() !== '' && venueId !== 'null' && venueId !== 'undefined' && venueId.trim() !== 'venue') {
+        const clean = venueId.trim();
+        try {
+          const v = await this.prisma.venue.findFirst({
+            where: {
+              OR: [
+                { id: clean },
+                { slug: clean.toLowerCase() },
+              ],
+            },
+            select: { id: true },
+          });
+          if (v) resolvedVenueId = v.id;
+        } catch (_) {}
+      }
       return await db.notification.findMany({
-        where: { venueId, ...(unreadOnly ? { read: false } : {}) },
+        where: { venueId: resolvedVenueId, ...(unreadOnly ? { read: false } : {}) },
         orderBy: { createdAt: 'desc' },
         take: 100,
       });
@@ -98,6 +114,22 @@ export class NotificationsService {
 
   async markAllRead(venueId: string) {
     const db = this.prisma as any;
-    return db.notification.updateMany({ where: { venueId, read: false }, data: { read: true } });
+    let resolvedVenueId = venueId;
+    if (venueId && venueId.trim() !== '' && venueId !== 'null' && venueId !== 'undefined' && venueId.trim() !== 'venue') {
+      const clean = venueId.trim();
+      try {
+        const v = await this.prisma.venue.findFirst({
+          where: {
+            OR: [
+              { id: clean },
+              { slug: clean.toLowerCase() },
+            ],
+          },
+          select: { id: true },
+        });
+        if (v) resolvedVenueId = v.id;
+      } catch (_) {}
+    }
+    return db.notification.updateMany({ where: { venueId: resolvedVenueId, read: false }, data: { read: true } });
   }
 }
