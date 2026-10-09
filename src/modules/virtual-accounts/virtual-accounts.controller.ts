@@ -1,8 +1,10 @@
-import { Body, Controller, Get, Param, Post, ValidationPipe } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, UseGuards, ValidationPipe } from '@nestjs/common';
 import { VirtualAccountsService } from './virtual-accounts.service';
 import { CreateVirtualAccountDto } from './dto/create-virtual-account.dto';
+import { VenueAuthGuard } from './venue-auth.guard';
 
 @Controller('virtual-accounts')
+@UseGuards(VenueAuthGuard)
 export class VirtualAccountsController {
   constructor(private readonly va: VirtualAccountsService) {}
 

@@ -96,13 +96,32 @@ export class MikrotikAdapter {
     }
   }
 
+  async listHotspotUsers(
+    endpoint: string,
+    credentials: { username: string; password: string },
+    timeoutMs = 5000,
+  ): Promise<any[] | null> {
+    try {
+      const res = await fetch(`${endpoint}/rest/ip/hotspot/user`, {
+        headers: { Authorization: this.basicAuth(credentials.username, credentials.password) },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!res.ok) return null;
+      const users = (await res.json()) as any[];
+      return Array.isArray(users) ? users : null;
+    } catch {
+      return null;
+    }
+  }
+
   async removeHotspotUser(
     endpoint: string,
     credentials: { username: string; password: string },
     username: string,
+    routerOsId?: string,
   ): Promise<void> {
     const res = await fetch(
-      `${endpoint}/rest/ip/hotspot/user/${encodeURIComponent(username)}`,
+      `${endpoint}/rest/ip/hotspot/user/${encodeURIComponent(routerOsId || username)}`,
       {
         method: 'DELETE',
         headers: { Authorization: this.basicAuth(credentials.username, credentials.password) },

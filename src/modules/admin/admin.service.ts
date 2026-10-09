@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/commo
 import { PrismaService } from '../../common/prisma.service';
 import { PaystackService } from '../paystack/paystack.service';
 import { MikrotikProvisioningQueue } from '../mikrotik/mikrotik-provisioning.queue';
+import { MikrotikAdapter } from '../mikrotik/mikrotik.adapter';
 import { VenuesService } from '../venues/venues.service';
 import { CashoutsService } from '../cashouts/cashouts.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -18,7 +19,15 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
     private readonly provisioningQueue: MikrotikProvisioningQueue,
     private readonly cashouts?: CashoutsService,
     private readonly notifications?: NotificationsService,
+    private readonly mikrotik?: MikrotikAdapter,
   ) {}
+
+  private routerCredentials() {
+    return {
+      username: process.env.MIKROTIK_API_USER || 'admin',
+      password: process.env.MIKROTIK_API_PASS || '',
+    };
+  }
 
   onModuleInit() {
     // Run automated session sweep every 60 seconds
@@ -58,18 +67,17 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
 
     let routerStats = { total: 0, active: 0, expired: 0 };
     if (router) {
-      try {
-        const res = await fetch(`${router.endpoint}/rest/ip/hotspot/user`, { signal: AbortSignal.timeout(4000) });
-        if (res.ok) {
-          const users = (await res.json()) as any[];
-          routerStats = {
-            total: users.length,
-            active: users.filter((u) => !u.expired).length,
-            expired: users.filter((u) => u.expired).length,
-          };
-        }
-      } catch (err) {
-        // Router may be unreachable
+      const users = this.mikrotik
+        ? await this.mikrotik.listHotspotUsers(router.endpoint, this.routerCredentials(), 4000)
+        : null;
+      if (users) {
+        routerStats = {
+          total: users.length,
+          active: users.filter((u) => !u.expired).length,
+          expired: users.filter((u) => u.expired).length,
+        };
+      } else {
+        this.logger.warn(`getStats: could not fetch hotspot users from router ${router.endpoint}`);
       }
     }
 
@@ -128,18 +136,15 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
       };
     }
 
-    let routerUsers: any[] = [];
-    let routerReachable = true;
+    const routerUsers = this.mikrotik
+      ? await this.mikrotik.listHotspotUsers(router.endpoint, this.routerCredentials(), 5000)
+      : null;
 
-    try {
-      const res = await fetch(`${router.endpoint}/rest/ip/hotspot/user`, { signal: AbortSignal.timeout(5000) });
-      if (!res.ok) throw new Error(`router HTTP ${res.status}`);
-      routerUsers = (await res.json()) as any[];
-    } catch (err: any) {
-      routerReachable = false;
+    if (!routerUsers) {
+      this.logger.warn(`reconcile: router ${router.endpoint} unreachable or hotspot user lookup failed`);
       return {
         routerReachable: false,
-        error: `Router unreachable: ${err.message}`,
+        error: 'Router unreachable: failed to fetch hotspot users',
         mismatches: [],
         healed: [],
         orphans: [],
@@ -190,7 +195,7 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
       .map((u) => ({ mac: u.name, profile: u.profile }));
 
     return {
-      routerReachable,
+      routerReachable: true,
       totalPaymentsSuccess: fulfilledPayments.length,
       totalRouterUsers: routerUsers.length,
       mismatches,
@@ -209,19 +214,25 @@ export class AdminService implements OnModuleInit, OnModuleDestroy {
     const router = venue.routers[0];
     if (!router) return { ok: false, error: 'No router registered' };
 
+    const users = this.mikrotik
+      ? await this.mikrotik.listHotspotUsers(router.endpoint, this.routerCredentials(), 5000)
+      : null;
+    if (!users) {
+      this.logger.warn(`cleanup: router ${router.endpoint} unreachable or hotspot user lookup failed`);
+      return { ok: false, error: 'Cleanup failed: router unreachable' };
+    }
+
     try {
-      const res = await fetch(`${router.endpoint}/rest/ip/hotspot/user`, { signal: AbortSignal.timeout(5000) });
-      if (!res.ok) throw new Error(`router HTTP ${res.status}`);
-      const users = (await res.json()) as any[];
       const expired = users.filter((u) => u.expired || u.remainingMs <= 0);
 
       let removed = 0;
       for (const u of expired) {
-        const id = u['.id'] || u.name;
-        const delRes = await fetch(`${router.endpoint}/rest/ip/hotspot/user/${encodeURIComponent(id)}`, {
-          method: 'DELETE',
-        }).catch(() => null);
-        if (delRes && delRes.ok) removed++;
+        try {
+          await this.mikrotik!.removeHotspotUser(router.endpoint, this.routerCredentials(), u.name, u['.id']);
+          removed++;
+        } catch (err: any) {
+          this.logger.warn(`cleanup: failed to remove expired hotspot user ${u.name}: ${err.message}`);
+        }
       }
 
       // Sync DB sessions

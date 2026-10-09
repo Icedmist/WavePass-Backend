@@ -41,6 +41,7 @@ import { AdminController } from './modules/admin/admin.controller';
 import { AdminService } from './modules/admin/admin.service';
 import { AdminAuthService } from './modules/admin/admin-auth.service';
 import { AdminAuthGuard } from './modules/admin/admin-auth.guard';
+import { VenueAuthGuard } from './modules/virtual-accounts/venue-auth.guard';
 
 import { VirtualAccountsController } from './modules/virtual-accounts/virtual-accounts.controller';
 import { VirtualAccountsService } from './modules/virtual-accounts/virtual-accounts.service';
@@ -120,6 +121,7 @@ import { AppReleaseService } from './modules/app/app-release.service';
     AdminService,
     AdminAuthService,
     AdminAuthGuard,
+    VenueAuthGuard,
     PaymentFulfilmentQueue,
     PaymentFulfilmentProcessor,
     MikrotikProvisioningQueue,

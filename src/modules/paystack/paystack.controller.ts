@@ -140,6 +140,26 @@ export class PaystackController {
           return { received: true, duplicate: true, requeued: true };
         }
       }
+
+      // Duplicate transfer delivery — re-run cashout finalization if the
+      // cashout never reached a terminal status (mirrors charge.success above).
+      if (body?.event && TRANSFER_EVENTS.has(body.event) && body?.data?.transfer_code) {
+        const transferCode = String(body.data.transfer_code);
+        const cashout = await this.prisma.cashout.findFirst({
+          where: { providerTransferCode: transferCode },
+        });
+        if (cashout && !['COMPLETED', 'FAILED', 'REVERSED', 'REJECTED'].includes(cashout.status)) {
+          await this.cashouts?.finalizeTransferEvent(
+            transferCode,
+            body?.data?.status || body.event.split('.')[1],
+          );
+          await this.prisma.webhookEvent.update({
+            where: { eventKey },
+            data: { status: 'requeued' },
+          });
+          return { received: true, duplicate: true, requeued: true };
+        }
+      }
       return { received: true, duplicate: true };
     }
 
