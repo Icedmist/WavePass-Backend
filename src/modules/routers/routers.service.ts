@@ -229,6 +229,21 @@ export class RoutersService {
 /ip hotspot walled-garden add dst-host="*.nexawavepass.com" action=allow comment="WavePass Venues"
 /ip hotspot walled-garden add dst-host="api.nexawavepass.com" action=allow comment="WavePass API"
 
+# 3b. Walled Garden IP Rules — dst-host matching never fires for clients using
+# DNS-over-HTTPS (private DNS), so the critical hosts are also allowed by IP.
+# The API address is the current A record of api.nexawavepass.com; keep in sync
+# with the app's provisioning script when the server IP changes.
+/ip hotspot walled-garden ip
+add comment="WavePass API Static IP (HTTPS)" dst-address=134.209.116.20 action=accept
+add comment="WavePass Root Portal (HTTPS)" dst-host="nexawavepass.com" action=accept
+add comment="WavePass Portal (HTTPS)" dst-host="*.nexawavepass.com" action=accept
+add comment="Google Fonts (HTTPS)" dst-host="fonts.googleapis.com" action=accept
+add comment="Google Fonts Static (HTTPS)" dst-host="fonts.gstatic.com" action=accept
+add comment="Paystack Wildcard (HTTPS)" dst-host="*.paystack.com" action=accept
+add comment="Paystack Checkout Co (HTTPS)" dst-host="*.paystack.co" action=accept
+add comment="Paystack API (HTTPS)" dst-host="api.paystack.co" action=accept
+add comment="Paystack Checkout UI (HTTPS)" dst-host="checkout.paystack.com" action=accept
+
 # 4. Standard & Multi-Device User Profiles with Rate Limiting (Mikhmon Parity)
 /ip hotspot user profile add name="profile_1h" session-timeout=1h keepalive-timeout=2m shared-users=1 status-autorefresh=1m rate-limit="10M/5M" add-mac-cookie=yes mac-cookie-timeout=3d comment="WavePass 1-Hour Tier"
 /ip hotspot user profile add name="profile_12h" session-timeout=12h keepalive-timeout=2m shared-users=1 status-autorefresh=1m rate-limit="15M/5M" add-mac-cookie=yes mac-cookie-timeout=3d comment="WavePass 12-Hour Tier"
