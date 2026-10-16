@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { VouchersService } from './vouchers.service';
 
 @Controller('vouchers')
@@ -7,12 +7,61 @@ export class VouchersController {
 
   @Post('batches')
   generateBatch(
-    @Body() body: { venueId: string; planId: string; quantity: number; customCode?: string; customCodes?: string[]; expiresAt?: string; createdBy?: string },
+    @Body()
+    body: {
+      venueId: string;
+      planId: string;
+      quantity: number;
+      customCode?: string;
+      customCodes?: string[];
+      password?: string;
+      passwords?: string[];
+      sold?: boolean;
+      source?: string;
+      directMode?: string;
+      expiresAt?: string;
+      createdBy?: string;
+    },
   ) {
     return this.vouchers.generateBatch({
       ...body,
       expiresAt: body.expiresAt ? new Date(body.expiresAt) : undefined,
     });
+  }
+
+  @Post('sync')
+  sync(
+    @Body()
+    body: {
+      venueId: string;
+      vouchers: Array<{
+        code: string;
+        password?: string;
+        planId?: string;
+        planTitle?: string;
+        price?: string;
+        durationSeconds?: number;
+        status?: string;
+        sold?: boolean;
+        soldAt?: string;
+        source?: string;
+        directMode?: boolean | string;
+        createdAt?: string;
+        expiresAt?: string;
+        mac?: string;
+        ip?: string;
+      }>;
+    },
+  ) {
+    return this.vouchers.syncVouchers(body);
+  }
+
+  @Patch(':code/sold')
+  markSold(
+    @Param('code') code: string,
+    @Body() body: { sold: boolean },
+  ) {
+    return this.vouchers.markSold(code, body.sold ?? true);
   }
 
   @Get('check/:code')

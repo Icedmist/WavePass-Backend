@@ -16,6 +16,16 @@ export class RoutersController {
     return this.routers.getRouterById(id);
   }
 
+  @Get('venue/:venueId')
+  getByVenue(@Param('venueId') venueId: string) {
+    return this.routers.getVenueRouter(venueId);
+  }
+
+  @Post('sync')
+  sync(@Body() dto: CreateRouterDto) {
+    return this.routers.syncRouter(dto);
+  }
+
   @Post()
   create(@Body() dto: CreateRouterDto) {
     return this.routers.createRouter(dto);

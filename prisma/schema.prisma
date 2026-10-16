@@ -242,6 +242,10 @@ model Router {
   connectionMode String // local | tunnel
   rosVersion     String?
   status         RouterStatus @default(OFFLINE)
+  localIp        String?
+  username       String?
+  password       String?
+  tunnelEndpoint String?
   lastSeen       DateTime?
   createdAt      DateTime     @default(now())
 
@@ -318,6 +322,11 @@ model Voucher {
   paymentId        String?
   codeHash         String        @unique
   displayCodeEnc   String? // encrypted, retrievable for printing
+  password         String? // dual-credential password / PIN
+  sold             Boolean       @default(false)
+  soldAt           DateTime?
+  source           String?       // 'pos', 'batch', 'router', 'counter', 'supabase', 'paystack_online'
+  directMode       String?       // 'local', 'tunnel'
   status           VoucherStatus @default(GENERATED)
   issuedAt         DateTime      @default(now())
   expiresAt        DateTime?
@@ -337,6 +346,7 @@ model Voucher {
 
   @@index([venueId])
   @@index([status])
+  @@index([sold])
 }
 
 model Session {
