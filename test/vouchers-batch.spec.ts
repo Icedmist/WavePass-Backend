@@ -17,11 +17,42 @@ function mockPrisma() {
         for (const row of data) store.set(row.codeHash, { id: `v-${store.size + 1}`, ...row });
         return { count: data.length };
       }),
+      create: vi.fn(async ({ data }: any) => {
+        const item = { id: `v-${store.size + 1}`, ...data };
+        store.set(data.codeHash, item);
+        return item;
+      }),
+      update: vi.fn(async ({ where, data }: any) => {
+        const current = store.get(where.codeHash);
+        const updated = { ...current, ...data };
+        store.set(where.codeHash, updated);
+        return updated;
+      }),
+      updateMany: vi.fn(async ({ where, data }: any) => {
+        let count = 0;
+        for (const [key, v] of store.entries()) {
+          if (where?.expiresAt?.lt && (!v.expiresAt || new Date(v.expiresAt) >= new Date())) {
+            continue;
+          }
+          if (where?.codeHash && v.codeHash !== where.codeHash) {
+            continue;
+          }
+          store.set(key, { ...v, ...data });
+          count++;
+        }
+        return { count };
+      }),
       findMany: vi.fn(async ({ where }: any) => {
         const hashes: string[] = where?.codeHash?.in || [];
-        return [...store.values()].filter((r) => hashes.includes(r.codeHash));
+        if (hashes.length > 0) {
+          return [...store.values()].filter((r) => hashes.includes(r.codeHash));
+        }
+        return [...store.values()];
       }),
       findUnique: vi.fn(async ({ where }: any) => store.get(where.codeHash) || null),
+    },
+    plan: {
+      findMany: vi.fn(async () => [{ id: 'plan-1', name: 'Standard' }]),
     },
   } as any;
 }
@@ -106,3 +137,60 @@ describe('VouchersService.check (non-consuming)', () => {
     expect(again.status).toBe('ISSUED');
   });
 });
+
+describe('VouchersService.generateBatch with passwords & metadata', () => {
+  it('stores passwords and sold status when provided', async () => {
+    const prisma = mockPrisma();
+    const svc = new VouchersService(prisma, {} as any);
+    const res = await svc.generateBatch({
+      venueId: 'venue-1',
+      planId: 'plan-1',
+      quantity: 1,
+      customCode: 'V100',
+      password: 'PIN-999',
+      sold: true,
+      source: 'pos',
+    });
+    expect(res.created).toBe(1);
+    expect(res.vouchers[0].password).toBe('PIN-999');
+    expect(res.vouchers[0].sold).toBe(true);
+  });
+});
+
+describe('VouchersService.syncVouchers', () => {
+  it('upserts mobile vouchers with password and sold status', async () => {
+    const prisma = mockPrisma();
+    const svc = new VouchersService(prisma, {} as any);
+    const res = await svc.syncVouchers({
+      venueId: 'venue-1',
+      vouchers: [
+        { code: 'SYNC-1', password: 'PASS-1', planTitle: 'Standard', sold: true, source: 'pos' },
+        { code: 'SYNC-2', password: 'PASS-2', planTitle: 'Standard', sold: false, source: 'batch' },
+      ],
+    });
+    expect(res.synced).toBe(2);
+    expect(res.created).toBe(2);
+
+    // Re-syncing same codes should update without errors
+    const res2 = await svc.syncVouchers({
+      venueId: 'venue-1',
+      vouchers: [
+        { code: 'SYNC-1', password: 'PASS-1', sold: true },
+      ],
+    });
+    expect(res2.updated).toBe(1);
+  });
+});
+
+describe('VouchersService.markSold', () => {
+  it('toggles sold flag in database', async () => {
+    const prisma = mockPrisma();
+    const svc = new VouchersService(prisma, {} as any);
+    await svc.generateBatch({ venueId: 'venue-1', planId: 'plan-1', quantity: 1, customCode: 'SOLD-1' });
+
+    const res = await svc.markSold('SOLD-1', true);
+    expect(res.ok).toBe(true);
+    expect(res.sold).toBe(true);
+  });
+});
+

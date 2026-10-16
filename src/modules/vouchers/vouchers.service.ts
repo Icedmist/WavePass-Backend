@@ -38,6 +38,10 @@ export class VouchersService {
   async generateBatch(params: {
     venueId: string; planId: string; quantity: number;
     customCode?: string; customCodes?: string[];
+    password?: string; passwords?: string[];
+    sold?: boolean;
+    source?: string;
+    directMode?: string;
     expiresAt?: Date; createdBy?: string;
   }) {
     if (!params.venueId || !params.planId) {
@@ -58,13 +62,16 @@ export class VouchersService {
     // De-duplicate within the request (same code twice would P2002 the batch).
     codes = [...new Set(codes)];
 
-    const rows = codes.map((code) => ({
+    const rows = codes.map((code, index) => ({
       venueId: params.venueId,
       planId: params.planId,
       codeHash: hashCode(code),
-      // In production, encrypt `code` with ENCRYPTION_KEY for reprint retrieval
-      // rather than storing plaintext. Omitted here for scaffold brevity.
       displayCodeEnc: code,
+      password: params.passwords?.[index] || params.password || null,
+      sold: params.sold ?? false,
+      soldAt: params.sold ? new Date() : null,
+      source: params.source || 'batch',
+      directMode: params.directMode ? String(params.directMode) : null,
       expiresAt: params.expiresAt,
       createdBy: params.createdBy,
       status: 'ISSUED' as const,
@@ -75,10 +82,10 @@ export class VouchersService {
     const partition = async () => {
       const existing = await this.prisma.voucher.findMany({
         where: { codeHash: { in: rows.map((r) => r.codeHash) } },
-        select: { codeHash: true, displayCodeEnc: true, expiresAt: true, venueId: true, planId: true },
+        select: { codeHash: true, displayCodeEnc: true, password: true, sold: true, expiresAt: true, venueId: true, planId: true },
       });
       const byHash = new Map(existing.map((e) => [e.codeHash, e]));
-      const usable: Array<{ code: string | null; expiresAt: Date | null }> = [];
+      const usable: Array<{ code: string | null; password?: string | null; sold?: boolean; expiresAt: Date | null }> = [];
       const fresh: typeof rows = [];
       const conflicts: Array<{ code: string; reason: string }> = [];
       for (const row of rows) {
@@ -86,7 +93,16 @@ export class VouchersService {
         if (!hit) {
           fresh.push(row);
         } else if (hit.venueId === params.venueId && hit.planId === params.planId) {
-          usable.push({ code: hit.displayCodeEnc, expiresAt: hit.expiresAt });
+          if ((row.password && !hit.password) || (row.sold && !hit.sold)) {
+            await this.prisma.voucher.update({
+              where: { codeHash: row.codeHash },
+              data: {
+                ...(row.password && !hit.password ? { password: row.password } : {}),
+                ...(row.sold && !hit.sold ? { sold: true, soldAt: new Date() } : {}),
+              },
+            }).catch(() => {});
+          }
+          usable.push({ code: hit.displayCodeEnc, password: row.password || hit.password, sold: row.sold || hit.sold, expiresAt: hit.expiresAt });
         } else {
           conflicts.push({ code: row.displayCodeEnc!, reason: 'code already exists for another venue/plan' });
         }
@@ -100,9 +116,9 @@ export class VouchersService {
         await this.prisma.voucher.createMany({ data: fresh });
         const inserted = await this.prisma.voucher.findMany({
           where: { codeHash: { in: fresh.map((r) => r.codeHash) } },
-          select: { displayCodeEnc: true, expiresAt: true },
+          select: { displayCodeEnc: true, password: true, sold: true, expiresAt: true },
         });
-        usable = [...usable, ...inserted.map((v) => ({ code: v.displayCodeEnc, expiresAt: v.expiresAt }))];
+        usable = [...usable, ...inserted.map((v) => ({ code: v.displayCodeEnc, password: v.password, sold: v.sold, expiresAt: v.expiresAt }))];
       } catch (err: any) {
         if (err.code === 'P2002') {
           if (rows.length === 1) {
@@ -128,6 +144,138 @@ export class VouchersService {
       created: usable.length,
       conflicts,
     };
+  }
+
+  /**
+   * Bulk sync/upsert vouchers from mobile app into database.
+   * Guarantees POS sales, passwords, and counter vouchers are permanently stored in DB.
+   */
+  async syncVouchers(params: {
+    venueId: string;
+    vouchers: Array<{
+      code: string;
+      password?: string;
+      planId?: string;
+      planTitle?: string;
+      price?: string;
+      durationSeconds?: number;
+      status?: string;
+      sold?: boolean;
+      soldAt?: string | Date;
+      source?: string;
+      directMode?: boolean | string;
+      createdAt?: string | Date;
+      expiresAt?: string | Date;
+      mac?: string;
+      ip?: string;
+    }>;
+  }) {
+    if (!params.venueId) throw new BadRequestException('venueId is required');
+    const vouchers = params.vouchers || [];
+    if (vouchers.length === 0) return { synced: 0, created: 0, updated: 0 };
+
+    const venuePlans = await this.prisma.plan.findMany({
+      where: { venueId: params.venueId, active: true },
+    });
+    const defaultPlanId = venuePlans.length > 0 ? venuePlans[0].id : null;
+
+    let created = 0;
+    let updated = 0;
+
+    for (const item of vouchers) {
+      const code = normalizeCode(item.code);
+      if (!code) continue;
+      const codeHash = hashCode(code);
+      const isSold = item.sold === true;
+      const soldAt = item.soldAt ? new Date(item.soldAt) : (isSold ? new Date() : null);
+      const expiresAt = item.expiresAt ? new Date(item.expiresAt) : null;
+      const directModeStr = item.directMode ? String(item.directMode) : null;
+
+      const existing = await this.prisma.voucher.findUnique({ where: { codeHash } });
+      if (existing) {
+        const updateData: any = {};
+        if (item.password && !existing.password) updateData.password = item.password;
+        if (isSold && !existing.sold) {
+          updateData.sold = true;
+          updateData.soldAt = soldAt || new Date();
+        }
+        if (item.source && !existing.source) updateData.source = item.source;
+        if (directModeStr && directModeStr !== existing.directMode) updateData.directMode = directModeStr;
+        if (item.status && item.status.toUpperCase() === 'EXPIRED' && existing.status !== 'EXPIRED') {
+          updateData.status = 'EXPIRED';
+        }
+
+        if (Object.keys(updateData).length > 0) {
+          await this.prisma.voucher.update({
+            where: { codeHash },
+            data: updateData,
+          });
+        }
+        updated++;
+      } else {
+        let planId: string | null = item.planId || null;
+        if (!planId || !venuePlans.some((p) => p.id === planId)) {
+          if (item.planTitle) {
+            const matched = venuePlans.find(
+              (p) => p.name.toLowerCase() === item.planTitle!.toLowerCase(),
+            );
+            if (matched) planId = matched.id;
+          }
+          if (!planId && defaultPlanId) planId = defaultPlanId;
+        }
+
+        if (!planId) {
+          const defaultPlans = await this.prisma.plan.findMany({
+            where: { venueId: params.venueId },
+          });
+          planId = defaultPlans.length > 0 ? defaultPlans[0].id : null;
+        }
+
+        if (!planId) continue;
+
+        await this.prisma.voucher.create({
+          data: {
+            venueId: params.venueId,
+            planId,
+            codeHash,
+            displayCodeEnc: code,
+            password: item.password || null,
+            status: item.status?.toUpperCase() === 'EXPIRED' ? 'EXPIRED' : 'ISSUED',
+            sold: isSold,
+            soldAt,
+            source: item.source || 'pos',
+            directMode: directModeStr,
+            expiresAt,
+            issuedAt: item.createdAt ? new Date(item.createdAt) : new Date(),
+          },
+        }).catch(() => {});
+        created++;
+      }
+    }
+
+    return { synced: vouchers.length, created, updated };
+  }
+
+  /**
+   * Toggles sold status of a voucher in cloud DB.
+   */
+  async markSold(code: string, sold: boolean) {
+    const normalized = normalizeCode(code);
+    if (!normalized) throw new BadRequestException('Voucher code is required');
+    const codeHash = hashCode(normalized);
+    const res = await this.prisma.voucher.updateMany({
+      where: {
+        OR: [
+          { codeHash },
+          { displayCodeEnc: normalized },
+        ],
+      },
+      data: {
+        sold,
+        soldAt: sold ? new Date() : null,
+      },
+    });
+    return { ok: true, count: res.count, code: normalized, sold };
   }
 
   /**

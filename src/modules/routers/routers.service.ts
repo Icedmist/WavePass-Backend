@@ -32,6 +32,18 @@ export class RoutersService {
     return router;
   }
 
+  async getVenueRouter(venueId: string) {
+    const router = await this.prisma.router.findFirst({
+      where: { venueId },
+      orderBy: { createdAt: 'desc' },
+    });
+    return router;
+  }
+
+  async syncRouter(dto: CreateRouterDto) {
+    return this.createRouter(dto);
+  }
+
   async createRouter(dto: CreateRouterDto) {
     const existing = await this.prisma.router.findFirst({
       where: {
@@ -51,6 +63,10 @@ export class RoutersService {
           endpoint: dto.endpoint,
           connectionMode: dto.connectionMode,
           rosVersion: dto.rosVersion,
+          localIp: dto.localIp !== undefined ? dto.localIp : existing.localIp,
+          username: dto.username !== undefined ? dto.username : existing.username,
+          password: dto.password !== undefined ? dto.password : existing.password,
+          tunnelEndpoint: dto.tunnelEndpoint !== undefined ? dto.tunnelEndpoint : existing.tunnelEndpoint,
           status: RouterStatus.ONLINE,
           lastSeen: new Date(),
         },
@@ -65,6 +81,10 @@ export class RoutersService {
         endpoint: dto.endpoint,
         connectionMode: dto.connectionMode,
         rosVersion: dto.rosVersion,
+        localIp: dto.localIp,
+        username: dto.username,
+        password: dto.password,
+        tunnelEndpoint: dto.tunnelEndpoint,
         status: RouterStatus.OFFLINE,
       },
     });

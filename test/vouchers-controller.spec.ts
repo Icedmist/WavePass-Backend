@@ -68,9 +68,36 @@ describe('VouchersController unit tests', () => {
       revoke: vi.fn(async (id: string) => ({ id, status: 'REVOKED' })),
     };
     const controller = new VouchersController(mockVouchersService);
-
     const res = await controller.revoke('v-123');
     expect(mockVouchersService.revoke).toHaveBeenCalledWith('v-123');
     expect(res.status).toBe('REVOKED');
+  });
+
+  it('delegates sync to vouchers.syncVouchers', async () => {
+    const mockVouchersService: any = {
+      syncVouchers: vi.fn(async (params: any) => ({ synced: 1, created: 1, updated: 0 })),
+    };
+    const controller = new VouchersController(mockVouchersService);
+
+    const body = {
+      venueId: 'venue-1',
+      vouchers: [{ code: 'CODE1', password: 'PASS', sold: true }],
+    };
+    const res = await controller.sync(body);
+
+    expect(mockVouchersService.syncVouchers).toHaveBeenCalledWith(body);
+    expect(res).toEqual({ synced: 1, created: 1, updated: 0 });
+  });
+
+  it('delegates markSold to vouchers.markSold', async () => {
+    const mockVouchersService: any = {
+      markSold: vi.fn(async (code: string, sold: boolean) => ({ ok: true, code, sold })),
+    };
+    const controller = new VouchersController(mockVouchersService);
+
+    const res = await controller.markSold('CODE1', { sold: true });
+
+    expect(mockVouchersService.markSold).toHaveBeenCalledWith('CODE1', true);
+    expect(res).toEqual({ ok: true, code: 'CODE1', sold: true });
   });
 });

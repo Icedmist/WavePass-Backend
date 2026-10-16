@@ -15,5 +15,21 @@ export class CreateRouterDto {
 
   @IsOptional()
   @IsString()
+  localIp?: string;
+
+  @IsOptional()
+  @IsString()
+  username?: string;
+
+  @IsOptional()
+  @IsString()
+  password?: string;
+
+  @IsOptional()
+  @IsString()
+  tunnelEndpoint?: string;
+
+  @IsOptional()
+  @IsString()
   rosVersion?: string;
 }
