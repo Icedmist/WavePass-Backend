@@ -481,3 +481,18 @@ model AuditLog {
 
   @@index([venueId])
 }
+
+model UserAppState {
+  id             String    @id @default(uuid())
+  userId         String?
+  email          String    @unique
+  activeVenueId  String?
+  routerConfig   Json?     @default("{}")
+  portalBranding Json?     @default("{}")
+  printerConfig  Json?     @default("{}")
+  preferences    Json?     @default("{}")
+  updatedAt      DateTime? @default(now())
+  createdAt      DateTime  @default(now())
+
+  @@index([email])
+}
