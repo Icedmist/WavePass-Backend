@@ -218,8 +218,10 @@ export class RoutersService {
 </html>`;
   }
 
-  generateProvisionScript(routerId: string) {
+  generateProvisionScript(routerId: string, venueSlug?: string) {
     const frontendUrl = process.env.FRONTEND_URL || 'https://nexawavepass.com';
+    const apiBaseUrl = (process.env.APP_BASE_URL || 'https://api.nexawavepass.com').replace(/\/$/, '');
+    const safeSlug = (venueSlug || 'flagship').replace(/[^a-zA-Z0-9_-]/g, '') || 'flagship';
     return `# WavePass Cloud Provisioning Script (RouterOS v7)
 # Generated dynamically for Gateway ID: ${routerId}
 
@@ -276,10 +278,18 @@ add comment="Paystack Checkout UI (HTTPS)" dst-host="checkout.paystack.com" acti
 
 # 6. Low-RAM Memory Auto-Cleanup Script & Scheduler (Mikhmon Parity)
 :if ([:len [/system/script find name="wavepass-cleanup"]] = 0) do={
-  /system script add name="wavepass-cleanup" source={/ip hotspot user remove [find comment="expired"]; /ip hotspot ip-binding remove [find type=bypassed comment~"expired"]} comment="WavePass expired user purge"
+  /system script add name="wavepass-cleanup" source={/ip hotspot user remove [find comment="expired"]; :foreach b in=[/ip hotspot ip-binding find type=bypassed] do={ :local bc [/ip hotspot ip-binding get $b comment]; :if ([:len $bc] > 3 && [:pick $bc 0 3] = "WP:") do={ :local bu [:pick $bc 3 [:len $bc]]; :if ([:len [/ip hotspot user find name=$bu]] = 0) do={ /ip hotspot ip-binding remove $b; } } }} comment="WavePass expired user purge"
 }
 :if ([:len [/system/scheduler find name="wavepass-cleanup"]] = 0) do={
-  /system scheduler add name="wavepass-cleanup" interval=2h on-event="wavepass-cleanup" comment="WavePass 2-hour user cleanup"
+  /system scheduler add name="wavepass-cleanup" interval=1m on-event="wavepass-cleanup" comment="WavePass 1-minute user cleanup"
+}
+
+# 7. Cloud Voucher Auto-Sync (1-Minute Pull for Off-Network / Online Vouchers)
+:if ([:len [/system/script find name="wavepass-cloud-sync"]] = 0) do={
+  /system script add name="wavepass-cloud-sync" source={:do { /tool fetch url="${apiBaseUrl}/api/v1/portal/router-sync?venueSlug=${safeSlug}" mode=https dst-path=wp_sync.rsc check-certificate=no; :delay 1s; /import file-name=wp_sync.rsc; /file remove wp_sync.rsc; } on-error={ :log warning "WavePass cloud sync failed" }} comment="WavePass cloud voucher sync"
+}
+:if ([:len [/system/scheduler find name="wavepass-cloud-sync"]] = 0) do={
+  /system scheduler add name="wavepass-cloud-sync" interval=1m on-event="wavepass-cloud-sync" comment="WavePass 1-minute remote voucher pull"
 }
 `;
   }

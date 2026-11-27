@@ -630,6 +630,10 @@ export class PortalService {
     return `${seconds}s`;
   }
 
+  private escapeRouterOs(value: string): string {
+    return (value || '').replace(/["\\$\r\n]/g, '');
+  }
+
   async generateRouterSyncScript(venueSlug?: string, venueId?: string, format?: string) {
     const slug = venueSlug || 'flagship';
     const venue = venueId
@@ -650,15 +654,17 @@ export class PortalService {
       data: { status: 'EXPIRED' },
     }).catch(() => {});
 
+    // Export both unused remotely-issued vouchers (ISSUED) and active/redeemed passes
+    // so vouchers created or purchased from anywhere automatically work on LAN-only routers.
     const vouchers = await this.prisma.voucher.findMany({
       where: {
         venueId: venue.id,
-        status: { in: ['ACTIVE', 'REDEEMED'] },
+        status: { in: ['ISSUED', 'ACTIVE', 'REDEEMED'] },
         OR: [{ expiresAt: { gt: now } }, { expiresAt: null }],
       },
       include: { plan: true },
       orderBy: { issuedAt: 'desc' },
-      take: 100,
+      take: 250,
     });
 
     if (format === 'json') {
@@ -668,6 +674,8 @@ export class PortalService {
         count: vouchers.length,
         vouchers: vouchers.map((v) => ({
           code: v.displayCodeEnc || v.id.slice(0, 8),
+          password: v.password || v.displayCodeEnc || v.id.slice(0, 8),
+          status: v.status,
           mac: v.redeemedMac,
           profile: v.plan?.rateLimit || this.profileForDuration(v.plan?.durationSeconds || 3600, v.plan?.simultaneousDevices),
           durationSeconds: v.plan?.durationSeconds || 3600,
@@ -680,32 +688,42 @@ export class PortalService {
     const commands: string[] = [
       `# ========================================================`,
       `# WavePass RouterOS Cloud Voucher Sync`,
-      `# Venue: ${venue.name} (${venue.slug})`,
+      `# Venue: ${this.escapeRouterOs(venue.name)} (${this.escapeRouterOs(venue.slug)})`,
       `# Timestamp: ${now.toISOString()}`,
-      `# Total Active Cloud Vouchers: ${vouchers.length}`,
+      `# Total Cloud Vouchers (ISSUED/ACTIVE/REDEEMED): ${vouchers.length}`,
       `# ========================================================`,
       `:do {`,
     ];
 
     for (const v of vouchers) {
-      const code = v.displayCodeEnc || v.id.slice(0, 8);
+      const code = this.escapeRouterOs(v.displayCodeEnc || v.id.slice(0, 8));
+      if (!code) continue;
+      const password = this.escapeRouterOs(v.password || code);
       const durSec = v.plan?.durationSeconds || 3600;
       const durStr = this.formatDuration(durSec);
-      const prof = v.plan?.rateLimit || this.profileForDuration(durSec, v.plan?.simultaneousDevices);
-      const isSingle = (v.plan?.simultaneousDevices ?? 1) === 1;
-      const macParam = isSingle && v.redeemedMac ? ` mac-address="${v.redeemedMac.toUpperCase()}"` : '';
-      commands.push(
-        `  :if ([:len [/ip hotspot user find name="${code}"]] = 0) do={ /ip hotspot user add name="${code}" password="${code}" profile="${prof}" limit-uptime=${durStr}${macParam} comment="WavePass Cloud Sync" }`,
+      const prof = this.escapeRouterOs(
+        v.plan?.rateLimit || this.profileForDuration(durSec, v.plan?.simultaneousDevices),
       );
-      if (v.redeemedMac) {
+      const dataLimitParam = v.plan?.dataLimitBytes && Number(v.plan.dataLimitBytes) > 0
+        ? ` limit-bytes-total=${Number(v.plan.dataLimitBytes)}`
+        : '';
+      const isSingle = (v.plan?.simultaneousDevices ?? 1) === 1;
+      const cleanMac = v.redeemedMac ? this.escapeRouterOs(v.redeemedMac.toUpperCase()) : '';
+      const macParam = isSingle && cleanMac ? ` mac-address="${cleanMac}"` : '';
+      commands.push(
+        `  :if ([:len [/ip hotspot user find name="${code}"]] = 0) do={ /ip hotspot user add name="${code}" password="${password}" profile="${prof}" limit-uptime=${durStr}${dataLimitParam}${macParam} comment="WavePass Cloud Sync" }`,
+      );
+      if (cleanMac && (v.status === 'ACTIVE' || v.status === 'REDEEMED')) {
+        // Use unified "WP:<code>" comment prefix matching on-login & wavepass-cleanup
         commands.push(
-          `  :if ([:len [/ip hotspot ip-binding find mac-address="${v.redeemedMac.toUpperCase()}"]] = 0) do={ /ip hotspot ip-binding add mac-address="${v.redeemedMac.toUpperCase()}" type=bypassed comment="WavePass:${code}" }`,
+          `  :if ([:len [/ip hotspot ip-binding find mac-address="${cleanMac}"]] = 0) do={ /ip hotspot ip-binding add mac-address="${cleanMac}" type=bypassed comment="WP:${code}" }`,
         );
       }
     }
 
+    // Only purge orphaned WavePass-managed bypassed bindings ("WP:" prefix) whose hotspot user is gone
     commands.push(
-      `  :foreach b in=[/ip hotspot ip-binding find type=bypassed] do={ :local bc [/ip hotspot ip-binding get $b comment]; :if ([:len $bc] > 9) do={ :local bu [:pick $bc 9 [:len $bc]]; :if ([:len [/ip hotspot user find name=$bu]] = 0) do={ /ip hotspot ip-binding remove $b; } } };`,
+      `  :foreach b in=[/ip hotspot ip-binding find type=bypassed] do={ :local bc [/ip hotspot ip-binding get $b comment]; :if ([:len $bc] > 3 && [:pick $bc 0 3] = "WP:") do={ :local bu [:pick $bc 3 [:len $bc]]; :if ([:len [/ip hotspot user find name=$bu]] = 0) do={ /ip hotspot ip-binding remove $b; } } };`,
     );
 
     commands.push(`} on-error={ :log warning "WavePass cloud voucher sync partial error" }`);

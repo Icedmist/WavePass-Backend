@@ -52,8 +52,8 @@ export class RoutersController {
   }
 
   @Get(':id/provision.rsc')
-  getProvisionScript(@Param('id') id: string) {
-    return this.routers.generateProvisionScript(id);
+  getProvisionScript(@Param('id') id: string, @Query('venueSlug') venueSlug?: string) {
+    return this.routers.generateProvisionScript(id, venueSlug);
   }
 
   @Get(':id/hotspot-login.html')
