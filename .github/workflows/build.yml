@@ -7,41 +7,32 @@ on:
 
 env:
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+  IMAGE_NAME: ghcr.io/icedmist/wavepass-backend
 
 jobs:
   build:
     name: Build Docker Image
     runs-on: ubuntu-latest
-    env:
-      DO_REGISTRY_TOKEN: ${{ secrets.DO_REGISTRY_TOKEN }}
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - name: Login to DO Registry
-        id: do_login
-        continue-on-error: true
-        if: env.DO_REGISTRY_TOKEN != ''
+      - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
-          registry: registry.digitalocean.com
-          username: ${{ secrets.DO_REGISTRY_USER }}
-          password: ${{ secrets.DO_REGISTRY_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push
-        if: env.DO_REGISTRY_TOKEN != '' && steps.do_login.outcome == 'success'
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: registry.digitalocean.com/wavepass/api:latest
-          cache-from: type=registry,ref=registry.digitalocean.com/wavepass/api:buildcache
-          cache-to: type=registry,ref=registry.digitalocean.com/wavepass/api:buildcache,mode=max
-      - name: Build (no push without registry)
-        if: env.DO_REGISTRY_TOKEN == '' || steps.do_login.outcome != 'success'
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: false
-          tags: registry.digitalocean.com/wavepass/api:latest
+          tags: ${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   deploy:
     name: Deploy to DigitalOcean Droplet
@@ -56,27 +47,47 @@ jobs:
           key: ${{ secrets.DROPLET_SSH_KEY }}
           passphrase: ${{ secrets.DROPLET_SSH_PASSPHRASE || '' }}
           script: |
+            set -euo pipefail
             echo "🚀 Starting automated deployment on droplet..."
             cd ~/WavePass-Backend || cd ~/wavepass-backend
-            
-            echo "📥 Pulling latest git repository changes..."
-            git pull --ff-only origin main || echo "⚠️ git pull failed (private repo without credential helper?) — continuing with registry image"
 
-            echo "🐳 Updating API container..."
-            # Pull prebuilt image if registry is configured; otherwise build with layer caching
-            timeout 300 docker compose pull api || docker compose build api
+            echo "📥 Pulling latest git repository updates first..."
+            git fetch origin main
+            git reset --hard origin/main
 
-            echo "🔄 Gracefully updating api container without stopping database..."
+            echo "🐳 Pulling latest API image (or building locally as fallback)..."
+            timeout 300 docker compose pull api || timeout 300 docker compose build api
+
+            echo "🧩 Ensuring Redis and backing services are running..."
+            docker compose up -d redis postgres
+
+            echo "🗄️ Running Prisma database migrations before restarting API..."
+            timeout 90 docker compose run --rm --no-deps api npx prisma migrate deploy
+
+            echo "🔄 Gracefully restarting API container with migrated schema..."
             timeout 180 docker compose up -d --no-deps api
-
-            echo "🗄️ Running Prisma database migrations..."
-            timeout 60 docker compose exec -T api npx prisma migrate deploy || timeout 60 docker compose run --rm api npx prisma migrate deploy || echo "⚠️ Migration step finished"
 
             echo "🧹 Pruning old dangling images..."
             timeout 120 docker image prune -f --filter "until=24h" || true
 
-            echo "🩺 Verifying container health..."
-            sleep 6
-            timeout 30 curl -sf http://localhost:4000/api/v1/health || timeout 30 curl -sf http://localhost:3000/api/v1/health || (echo "⚠️ Health check returned non-200. Showing recent logs:" && timeout 30 docker compose logs --tail=30 api)
+            echo "🩺 Verifying container health and database readiness..."
+            HEALTH_OK=0
+            for i in $(seq 1 15); do
+              if curl -sf http://127.0.0.1:4000/api/v1/health >/dev/null && curl -sf http://127.0.0.1:4000/api/v1/health/ready >/dev/null; then
+                HEALTH_OK=1
+                break
+              fi
+              sleep 2
+            done
 
+            if [ "$HEALTH_OK" -ne 1 ]; then
+              echo "❌ Health check failed. Recent API logs:"
+              docker compose logs --tail=40 api
+              exit 1
+            fi
+
+            curl -sf http://127.0.0.1:4000/api/v1/health
+            echo ""
+            curl -sf http://127.0.0.1:4000/api/v1/health/ready
+            echo ""
             echo "✅ Deployment completed successfully!"

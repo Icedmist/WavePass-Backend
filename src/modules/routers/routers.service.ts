@@ -254,7 +254,7 @@ export class RoutersService {
 # The API address is the current A record of api.nexawavepass.com; keep in sync
 # with the app's provisioning script when the server IP changes.
 /ip hotspot walled-garden ip
-add comment="WavePass API Static IP (HTTPS)" dst-address=134.209.116.20 action=accept
+add comment="WavePass API Static IP (HTTPS)" dst-address=165.227.161.167 action=accept
 add comment="WavePass Root Portal (HTTPS)" dst-host="nexawavepass.com" action=accept
 add comment="WavePass Portal (HTTPS)" dst-host="*.nexawavepass.com" action=accept
 add comment="Google Fonts (HTTPS)" dst-host="fonts.googleapis.com" action=accept
